@@ -12,7 +12,7 @@ import re
 import sys
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 try:
     import psycopg2
@@ -298,180 +298,6 @@ def process_pagamentos_batch(conn, config, logger):
     return len(rows)
 
 
-# ============================================================
-# Job 2: SASI Evaluations Parser
-# ============================================================
-
-def extract_field(data_fields, field_name):
-    """Extract a field's formattedValue from the data_fields JSON array."""
-    if not data_fields:
-        return None
-    for field in data_fields:
-        if field.get("name") == field_name:
-            return field.get("formattedValue") or field.get("value") or None
-    return None
-
-
-def resolve_data_registro(dia_de_registro, generated_at):
-    """
-    Resolve 'Hoje'/'Ontem' relative to generated_at timestamp.
-    Returns a date string (YYYY-MM-DD).
-    """
-    if not generated_at:
-        return None
-
-    if isinstance(generated_at, str):
-        # Parse ISO timestamp
-        generated_at = generated_at.replace("Z", "+00:00")
-        try:
-            dt = datetime.fromisoformat(generated_at)
-        except ValueError:
-            return None
-    else:
-        dt = generated_at
-
-    raw = (dia_de_registro or "").lower().strip()
-    if raw in ("ontem", "yesterday"):
-        dt = dt - timedelta(days=1)
-
-    return dt.strftime("%Y-%m-%d")
-
-
-def fetch_unprocessed_evaluations(conn, eval_config):
-    """Fetch sasi_messages from evaluation channel not yet in mn_daily_evaluations."""
-    channel = eval_config["channel_name"]
-    batch_size = eval_config.get("batch_size", 50)
-
-    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute("""
-            SELECT m.id, m.sasi_message_id, m.profile_id, m.profile_name,
-                   m.profile_email, m.generated_at, m.data_fields, m.raw_payload
-            FROM sasi_messages m
-            WHERE m.channel_name = %s
-              AND NOT EXISTS (
-                  SELECT 1 FROM mn_daily_evaluations e
-                  WHERE e.source_event_id = m.id
-              )
-            ORDER BY m.generated_at ASC
-            LIMIT %s
-        """, (channel, batch_size))
-        return cur.fetchall()
-
-
-def lookup_worker(conn, profile_email):
-    """Look up worker CPF by email from mn_mobile_users_contract."""
-    if not profile_email:
-        return None
-    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(
-            "SELECT cpf FROM mn_mobile_users_contract WHERE lower(email) = lower(%s) LIMIT 1",
-            (profile_email,)
-        )
-        row = cur.fetchone()
-        return row["cpf"] if row else None
-
-
-def insert_evaluation(conn, evaluation):
-    """Insert a single evaluation into mn_daily_evaluations."""
-    columns = list(evaluation.keys())
-    placeholders = ", ".join(["%s"] * len(columns))
-    col_names = ", ".join(columns)
-
-    with conn.cursor() as cur:
-        cur.execute(
-            f"INSERT INTO mn_daily_evaluations ({col_names}) VALUES ({placeholders})",
-            [evaluation[c] for c in columns]
-        )
-
-
-def process_evaluations_batch(conn, config, logger):
-    """Process SASI messages into evaluations."""
-    eval_config = config.get("evaluations")
-    if not eval_config or not eval_config.get("enabled", False):
-        return 0
-
-    rows = fetch_unprocessed_evaluations(conn, eval_config)
-    if not rows:
-        return 0
-
-    tenant_id = eval_config["tenant_id"]
-    success_count = 0
-    failure_count = 0
-
-    logger.info(f"[evaluations] Processing {len(rows)} new SASI messages")
-
-    for row in rows:
-        try:
-            data_fields = row["data_fields"]
-
-            # Parse JSON if stored as string
-            if isinstance(data_fields, str):
-                data_fields = json.loads(data_fields)
-
-            # Extract form fields
-            dia_de_registro = extract_field(data_fields, "dia_de_registro")
-            trabalhei = extract_field(data_fields, "trabalhei")
-            local = extract_field(data_fields, "local")
-            produtividade = extract_field(data_fields, "produtividade")
-            motivo = extract_field(data_fields, "motivo")
-            obs = extract_field(data_fields, "obs")
-            tempo_servico_prestado = extract_field(data_fields, "tempo_servico_prestado")
-            tempo_estimado = extract_field(data_fields, "tempo_estimado")
-            tempo_registrado = extract_field(data_fields, "tempo_registrado")
-
-            # Resolve the actual date
-            data_registro = resolve_data_registro(dia_de_registro, row["generated_at"])
-
-            # Look up worker CPF
-            cpf = lookup_worker(conn, row["profile_email"])
-
-            evaluation = {
-                "source_event_id": row["id"],
-                "sasi_profile_id": row["profile_id"],
-                "profile_name": row["profile_name"],
-                "email": row["profile_email"],
-                "cpf": cpf,
-                "dia_de_registro": dia_de_registro,
-                "data_registro": data_registro,
-                "data_enviado": row["generated_at"],
-                "trabalhei": trabalhei,
-                "local": local,
-                "produtividade": produtividade,
-                "motivo": motivo or None,
-                "obs": obs or None,
-                "tempo_servico_prestado": tempo_servico_prestado,
-                "tempo_estimado": tempo_estimado or None,
-                "tempo_registrado": tempo_registrado or None,
-                "alert_id": row["sasi_message_id"],
-                "raw_data": json.dumps(row["raw_payload"]) if row["raw_payload"] else None,
-                "tenant_id": tenant_id,
-            }
-
-            insert_evaluation(conn, evaluation)
-            conn.commit()
-
-            success_count += 1
-            logger.debug(f"[evaluations] Inserted: {row['profile_name']} — {data_registro}")
-
-        except Exception as e:
-            conn.rollback()
-            logger.error(f"[evaluations] Message {row['id']}: {e}")
-            failure_count += 1
-
-    logger.info(f"[evaluations] Done — {success_count} ok, {failure_count} fail")
-
-    # Log summary to cleaner_log
-    try:
-        log_to_db(conn, "eval_batch", config,
-                  status="success" if failure_count == 0 else "partial",
-                  rows_processed=success_count + failure_count,
-                  message=f"evaluations: success={success_count} failure={failure_count}")
-        conn.commit()
-    except Exception:
-        conn.rollback()
-
-    return success_count + failure_count
-
 
 # ============================================================
 # Main loop
@@ -485,24 +311,13 @@ def main():
     logger.info("Cleaner agent started")
     logger.info(f"Polling every {interval}s")
 
-    eval_enabled = config.get("evaluations", {}).get("enabled", False)
-    if eval_enabled:
-        logger.info(f"[evaluations] Enabled — channel: {config['evaluations']['channel_name']}")
-
     while True:
         try:
             conn = get_connection(config)
 
-            # Job 1: Pagamentos
             p_count = process_pagamentos_batch(conn, config, logger)
             if p_count == 0:
                 logger.debug("[pagamentos] No untreated rows, sleeping...")
-
-            # Job 2: Evaluations
-            if eval_enabled:
-                e_count = process_evaluations_batch(conn, config, logger)
-                if e_count == 0:
-                    logger.debug("[evaluations] No new messages, sleeping...")
 
             conn.close()
 
