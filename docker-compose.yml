@@ -40,7 +40,7 @@ services:
   cleaner:
     build: ./cleaner
     container_name: portal-cleaner
-    restart: unless-stopped
+    restart: no
     networks:
       - portal_default
       - supabase_default

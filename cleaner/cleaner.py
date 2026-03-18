@@ -10,7 +10,6 @@ import logging
 import os
 import re
 import sys
-import time
 import uuid
 from datetime import datetime, timezone
 
@@ -349,25 +348,20 @@ def process_pagamentos_batch(conn, config, logger):
 def main():
     config = load_config()
     logger = setup_logging(config)
-    interval = config["processing"]["check_interval_seconds"]
 
-    logger.info("Cleaner agent started")
-    logger.info(f"Polling every {interval}s")
+    logger.info("Cleaner iniciado")
 
-    while True:
-        try:
-            conn = get_connection(config)
+    try:
+        conn = get_connection(config)
+        p_count = process_pagamentos_batch(conn, config, logger)
+        if p_count == 0:
+            logger.info("[pagamentos] Nenhum registro pendente.")
+        conn.close()
+    except Exception as e:
+        logger.error(f"Erro: {e}")
+        sys.exit(1)
 
-            p_count = process_pagamentos_batch(conn, config, logger)
-            if p_count == 0:
-                logger.debug("[pagamentos] No untreated rows, sleeping...")
-
-            conn.close()
-
-        except Exception as e:
-            logger.error(f"Connection/batch error: {e}")
-
-        time.sleep(interval)
+    logger.info("Cleaner finalizado")
 
 if __name__ == "__main__":
     main()
