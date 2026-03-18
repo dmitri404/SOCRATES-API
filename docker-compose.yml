@@ -47,6 +47,23 @@ services:
     environment:
       - TZ=America/Manaus
 
+  portal-estado-am:
+    build: ./portal-estado-am
+    container_name: portal-estado-am
+    restart: no
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      - TZ=America/Manaus
+      - SUPABASE_DB_HOST=supabase-db
+      - SUPABASE_DB_PORT=5432
+      - SUPABASE_DB_NAME=postgres
+      - SUPABASE_DB_USER=postgres
+      - SUPABASE_DB_PASSWORD=HKcSH_yTEsQ42cdEvhruQ9kNbrN54U4WfiLKDXD-Tf0
+    networks:
+      - portal_default
+      - supabase_default
+
   api:
     build: ./api
     container_name: portal-api
@@ -61,6 +78,7 @@ services:
       - DB_USER=postgres
       - DB_PASSWORD=HKcSH_yTEsQ42cdEvhruQ9kNbrN54U4WfiLKDXD-Tf0
       - API_KEY_ARISTOTELES=aris-22386d82643aa6e36b12688a7175698d
+      - API_KEY_PORTAL_ESTADO_AM=pea-a3f7c91d2b854e6a8d0f1c3e5b7a9d2f
     networks:
       - portal_default
       - supabase_default
