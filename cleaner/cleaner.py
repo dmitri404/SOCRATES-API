@@ -21,6 +21,49 @@ except ImportError:
     print("ERROR: psycopg2 not installed. Run: pip3 install psycopg2-binary")
     sys.exit(1)
 
+# Prefixos para extração do número da NF — ordenados do mais longo para o mais curto
+# para evitar matches parciais (ex: "NFS-e n.º " antes de "NFS-e ")
+_NF_PREFIXES = sorted([
+    "Nota Fiscal de Serviço Nº ",
+    "Nota Fiscal de Serviço n° ",
+    "Nota Fiscal de Serviço nº ",
+    "NOTA FISCAL N° ",
+    "Nota Fiscal: ",
+    "Eletrônica Nº ",
+    "Serviço Nº",
+    "Serviço nº ",
+    "DE SERVIÇO ",
+    "NFS-E Nº ",
+    "NFS-E N° ",
+    "NFS-e N° ",
+    "NFS-e n.º ",
+    "NFS-e nº ",
+    "NFS-e n° ",
+    "NFS-E: 0",
+    "NFS-E: ",
+    "NFS-E:",
+    "NFS-e: ",
+    "NFS-e:",
+    "NFS: ",
+    "NFSE Nº ",
+    "NF-e n°",
+    "NF Nº ",
+    "NF: ",
+    "NF ",
+    "fatura n° ",
+    "fatura n°",
+    "FATURA Nº ",
+    "FATURA: ",
+    "Fatura de nº ",
+    "NFS-e ",
+    "NFS-E ",
+], key=len, reverse=True)
+
+_NF_PATTERN = re.compile(
+    r'(?:' + '|'.join(re.escape(p) for p in _NF_PREFIXES) + r')(\d+)',
+    re.IGNORECASE,
+)
+
 # Load config
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cleaner_config.json")
 
@@ -93,7 +136,7 @@ def parse_descricao(value):
     if m:
         result["nl_numero"] = m.group(1)
 
-    m = re.search(r'(?:NF(?:S-?[eE]|SE)?|[Nn]ota\s+[Ff]is[cx]al(?:\s+de\s+Servi[çc]o)?)\s*(?::?\s*[Nn]?[ºo°\.]*\s*)(\d+)', value)
+    m = _NF_PATTERN.search(value)
     if m:
         result["nf_numero"] = m.group(1)
 
