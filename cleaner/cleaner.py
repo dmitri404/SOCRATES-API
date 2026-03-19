@@ -251,7 +251,7 @@ def insert_treated(conn, treated, config):
 
     with conn.cursor() as cur:
         cur.execute(
-            f"INSERT INTO {target} ({col_names}) VALUES ({placeholders})",
+            f"INSERT INTO {target} ({col_names}) VALUES ({placeholders}) ON CONFLICT (id) DO NOTHING",
             [treated[c] for c in columns]
         )
 
