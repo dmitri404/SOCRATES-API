@@ -9,8 +9,9 @@ Sistema integrado de captura, processamento e armazenamento de documentos fiscai
 1. [Visão Geral](#1-visão-geral)
 2. [Arquitetura](#2-arquitetura)
 3. [Fluxo de Dados](#3-fluxo-de-dados)
-4. [Guia de Configuração](#4-guia-de-configuração)
-5. [Fluxograma](#5-fluxograma)
+4. [Agendamento (Cron)](#4-agendamento-cron)
+5. [Guia de Configuração](#5-guia-de-configuração)
+6. [Fluxograma](#6-fluxograma)
 
 ---
 
@@ -25,13 +26,13 @@ O sistema automatiza o ciclo completo de tratamento de documentos fiscais emitid
 | Notas Fiscais em PDFs dispersos em pastas de rede | ProcessadorNF lê e estrutura os dados automaticamente |
 | Credenciais do banco de dados expostas no cliente | Portal API intermediária — o cliente nunca toca o Supabase diretamente |
 | Dados brutos de pagamentos no portal SEFAZ | Scrapers coletam e inserem no banco de forma automática |
-| Dados de pagamentos sem tratamento para análise | Cleaner transforma e normaliza os registros |
+| Dados de pagamentos sem tratamento para análise | Cleaners transformam e normalizam os registros por portal |
 | Múltiplos portais com schemas distintos | Cada portal tem seu próprio router, schema e chave de API |
 
 ### Escopo
 
-- **Portal Municipal Manaus** — NFS-e emitidas para a Prefeitura de Manaus
-- **Portal Estado AM** — Pagamentos e empenhos via portal de transparência SEFAZ/AM
+- **Portal Municipal Manaus** — NFS-e emitidas para a Prefeitura de Manaus (`schema: public`)
+- **Portal Estado AM** — Pagamentos e empenhos via portal de transparência SEFAZ/AM (`schema: portal_estado_am`)
 
 ---
 
@@ -74,21 +75,37 @@ O sistema automatiza o ciclo completo de tratamento de documentos fiscais emitid
 │                             │                                    │
 │  ┌──────────────────────────▼─────────────────────────────── ┐  │
 │  │  PostgreSQL / Supabase (porta 5432 interna)                │  │
-│  │  ├── schema: public         → faturamento (municipal)      │  │
-│  │  └── schema: portal_estado_am → pagamentos, nl_itens, conf │  │
+│  │  ├── schema: public            → faturamento, pagamentos   │  │
+│  │  │                               pagamentos_treated        │  │
+│  │  └── schema: portal_estado_am  → pagamentos, nl_itens      │  │
+│  │                                  pagamentos_treated, conf  │  │
 │  └───────────────────────────────────────────────────────────┘  │
 │                                                                  │
-│  ┌───────────────┐  ┌───────────────┐  ┌──────────────────────┐ │
-│  │  portal-      │  │  socrates     │  │  portal-cleaner      │ │
-│  │  aristoteles  │  │  (Playwright) │  │  (ETL pagamentos)    │ │
-│  │  PDF watcher  │  │  SEFAZ scraper│  │  pagamentos_treated  │ │
-│  └───────────────┘  └───────────────┘  └──────────────────────┘ │
-│                                                                  │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │  portal-estado-am (Playwright · SEFAZ transparência)      │  │
-│  └───────────────────────────────────────────────────────────┘  │
+│  ┌──────────────────┐  ┌──────────────────┐                     │
+│  │ portal-municipal │  │ portal-estado-am │                     │
+│  │ -mao (novo7.py)  │  │ (main.py)        │                     │
+│  │ Playwright/SEFAZ │  │ Playwright/SEFAZ │                     │
+│  └────────┬─────────┘  └────────┬─────────┘                     │
+│           │                     │                               │
+│           ▼                     ▼                               │
+│  ┌──────────────────┐  ┌──────────────────────────┐            │
+│  │ portal-cleaner   │  │ portal-cleaner-estado-am │            │
+│  │ ETL public.      │  │ ETL portal_estado_am.    │            │
+│  │ pagamentos       │  │ pagamentos               │            │
+│  └──────────────────┘  └──────────────────────────┘            │
 └──────────────────────────────────────────────────────────────────┘
 ```
+
+### Containers Docker
+
+| Container | Script | Função | Restart |
+|---|---|---|---|
+| `portal-api` | `main.py` | API HTTP porta 9000 | always |
+| `portal-municipal-mao` | `novo7.py` | Scraping SEFAZ Municipal | no (cron) |
+| `portal-estado-am` | `main.py` | Scraping SEFAZ Estadual | no (cron) |
+| `portal-cleaner` | `cleaner.py` | ETL `public.pagamentos` | no (cron) |
+| `portal-cleaner-estado-am` | `cleaner_estado_am.py` | ETL `portal_estado_am.pagamentos` | no (cron) |
+| `portal-aristoteles` | `main.py` | Watcher PDF (desativado) | no |
 
 ### Redes Docker
 
@@ -101,9 +118,8 @@ O sistema automatiza o ciclo completo de tratamento de documentos fiscais emitid
 
 - **ProcessadorNF → portal-api**: HTTP REST com header `x-api-key`
 - **portal-api → PostgreSQL**: psycopg2 direto via rede Docker (`supabase-db:5432`)
-- **portal-aristoteles → PostgreSQL**: psycopg2 direto (sem passar pela API)
-- **socrates / portal-estado-am → PostgreSQL**: psycopg2 direto
-- **cleaner → PostgreSQL**: psycopg2 direto (leitura e escrita)
+- **portal-municipal-mao / portal-estado-am → PostgreSQL**: psycopg2 direto
+- **portal-cleaner / portal-cleaner-estado-am → PostgreSQL**: psycopg2 direto
 
 ---
 
@@ -143,14 +159,28 @@ O sistema automatiza o ciclo completo de tratamento de documentos fiscais emitid
 6. Retorna JSON: {"status": "inserido" | "duplicata", "numero_nota": "..."}
 ```
 
-### 3.3 Coleta de Dados de Transparência (portal-estado-am)
+### 3.3 Scraping Portal Municipal Manaus (portal-municipal-mao)
 
-**Ator:** Container portal-estado-am (agendado ou sob demanda)
+**Ator:** Cron 02:00 seg–sex / disparo por e-mail via platao.sh
+
+```
+1. Carrega configurações das tabelas conf, conf_cpfs, conf_exercicios
+2. Para cada CPF/CNPJ × exercício configurado:
+   a. Abre Playwright, navega para portal SEFAZ Municipal
+   b. Coleta empenhos e pagamentos
+   c. Verifica cache de números já existentes
+   d. Insere novos registros em public.pagamentos
+3. Envia notificação por e-mail aos destinatários em conf_emails
+```
+
+### 3.4 Scraping Portal Estado AM (portal-estado-am)
+
+**Ator:** Cron 02:00 seg–sex
 
 ```
 1. Lê configurações da tabela portal_estado_am.conf (exercicio, mês, credores)
 2. Abre browser Playwright (Chromium headless)
-3. Navega para https://sistemas.sefaz.am.gov.br/transparencia/pagamentos/credor
+3. Navega para portal SEFAZ/AM transparência
 4. Para cada CNPJ/CPF configurado:
    a. Preenche formulário de busca
    b. Coleta lista de pagamentos (num_ob, orgão, valor, datas)
@@ -160,46 +190,64 @@ O sistema automatiza o ciclo completo de tratamento de documentos fiscais emitid
 5. Registra execução em portal_estado_am.execucao_logs
 ```
 
-### 3.4 ETL de Pagamentos (portal-cleaner)
+### 3.5 ETL Portal Municipal (portal-cleaner)
 
-**Ator:** Container portal-cleaner (batch)
-
-```
-1. Lê registros não tratados de portal_estado_am.pagamentos
-2. Para cada registro:
-   a. Remove prefixos desnecessários das colunas
-   b. Extrai valores financeiros (valor, valor_anulado) da descrição
-   c. Parseia descrição: número NL, número NF, data, período, credor, tipo retenção
-   d. Insere em pagamentos_treated
-3. Processa mensagens SASI (avaliações diárias):
-   a. Lê sasi_messages não processadas
-   b. Extrai campos do formulário
-   c. Resolve datas relativas (Hoje/Ontem)
-   d. Busca CPF do trabalhador em mn_mobile_users_contract
-   e. Insere em mn_daily_evaluations
-   f. Marca mensagem como processada
-4. Registra métricas em cleaner_log
-```
-
-### 3.5 Scraping SEFAZ (socrates)
-
-**Ator:** Container portal-socrates (agendado via cron/systemd — 2h da manhã)
+**Ator:** Cron imediatamente após portal-municipal-mao (`&&`)
 
 ```
-1. Carrega configurações das tabelas conf, conf_cpfs, conf_exercicios
-2. Para cada CPF/CNPJ × exercício configurado:
-   a. Abre Playwright, navega para portal SEFAZ
-   b. Coleta empenhos e pagamentos
-   c. Verifica cache de números já existentes
-   d. Insere novos registros no banco
-3. Envia notificação por e-mail aos destinatários em conf_emails
+1. SELECT * FROM public.pagamentos WHERE treatment IS NULL LIMIT 100
+2. Para cada linha:
+   a. strip_prefix em "pagamento" e "data"
+   b. Extrai valor e valor_anulado da coluna valor
+   c. Parseia descricao: nf_numero, nl_numero, nf_data, mes_ref, credor, tipo_retencao
+   d. INSERT INTO public.pagamentos_treated ON CONFLICT (id) DO NOTHING
+   e. UPDATE pagamentos SET treatment = 'success' | 'failure'
+3. Registra métricas em cleaner_log
+```
+
+### 3.6 ETL Portal Estado AM (portal-cleaner-estado-am)
+
+**Ator:** Cron imediatamente após portal-estado-am (`&&`)
+
+```
+1. SELECT * FROM portal_estado_am.pagamentos WHERE treatment IS NULL LIMIT 100
+2. Para cada linha, parseia descricao_ob extraindo:
+   - nl_numero  → ex. 2025NL0001591
+   - nf_numero  → ex. 3530 (via lista de 35+ prefixos)
+   - nf_data    → ex. 01/12/2025 ou 06/01/26
+   - mes_ref    → ex. JAN/2025
+   - processo   → ex. 028101.009412/2025-05
+   - contrato   → ex. 43/2021
+3. INSERT INTO portal_estado_am.pagamentos_treated ON CONFLICT (id) DO NOTHING
+4. UPDATE pagamentos SET treatment = 'success' | 'failure'
 ```
 
 ---
 
-## 4. Guia de Configuração
+## 4. Agendamento (Cron)
 
-### 4.1 Variáveis de Ambiente — Portal API (`api` service)
+```
+# Scraping + ETL — Portal Municipal Manaus (sequencial)
+0 2 * * 1-5   portal-municipal-mao  &&  portal-cleaner
+
+# Scraping + ETL — Portal Estado AM (sequencial)
+0 2 * * 1-5   portal-estado-am  &&  portal-cleaner-estado-am
+
+# Disparo manual por e-mail (qualquer horário)
+*             sync_procmail verifica conf_emails a cada hora
+              e-mail "atualizar portal" → platao.sh → portal-municipal-mao
+
+# Sincronização de filtros de e-mail
+0 * * * *     sync_procmail.py
+```
+
+> O operador `&&` garante que o cleaner só executa se o scraper terminar **sem erro**.
+
+---
+
+## 5. Guia de Configuração
+
+### 5.1 Variáveis de Ambiente — Portal API (`api` service)
 
 | Variável | Descrição | Exemplo |
 |---|---|---|
@@ -213,17 +261,16 @@ O sistema automatiza o ciclo completo de tratamento de documentos fiscais emitid
 
 > As variáveis são carregadas via `.env` no `docker-compose.yml`. O arquivo `.env` **não é versionado** (está no `.gitignore`).
 
-### 4.2 Variáveis de Ambiente — Demais Serviços
+### 5.2 Configuração dos Cleaners
 
-| Serviço | Variável | Descrição |
+Os cleaners usam arquivos `*_config.json` com credenciais do banco — **não versionados**.
+
+| Serviço | Arquivo de config | Schema |
 |---|---|---|
-| socrates | `SUPABASE_DB_*` | Conexão direta ao PostgreSQL |
-| aristoteles | `SUPABASE_DB_*` | Conexão direta ao PostgreSQL |
-| aristoteles | `LOG_FILE` | Caminho do arquivo de log |
-| aristoteles | `MAX_WORKERS` | Threads para processamento paralelo |
-| portal-estado-am | `SUPABASE_DB_*` | Conexão direta ao PostgreSQL |
+| `portal-cleaner` | `cleaner/cleaner_config.json` | `public` |
+| `portal-cleaner-estado-am` | `cleaner-estado-am/cleaner_estado_am_config.json` | `portal_estado_am` |
 
-### 4.3 Configuração do ProcessadorNF (cliente Windows)
+### 5.3 Configuração do ProcessadorNF (cliente Windows)
 
 O app armazena configuração em:
 ```
@@ -247,9 +294,9 @@ senha    = senha_smb
 portal   = portal_estado_am
 ```
 
-A tela de configuração é protegida por senha. Para adicionar/editar perfis, acesse **Configurações** na interface e insira a senha definida no build.
+A tela de configuração é protegida por senha. Para adicionar/editar perfis, acesse **Configurações** na interface.
 
-### 4.4 Endpoints da Portal API
+### 5.4 Endpoints da Portal API
 
 **Base URL:** `http://187.77.240.80:9000`
 
@@ -271,7 +318,7 @@ A tela de configuração é protegida por senha. Para adicionar/editar perfis, a
 
 **Documentação interativa (Swagger):** `http://187.77.240.80:9000/docs`
 
-### 4.5 Dependências — Build do EXE (ProcessadorNF)
+### 5.5 Dependências — Build do EXE (ProcessadorNF)
 
 ```bash
 pip install pyinstaller pdfplumber PyPDF2 pytesseract pdf2image Pillow requests
@@ -282,15 +329,22 @@ pyinstaller app.py --onefile --windowed --name ProcessadorNF
 
 O executável gerado fica em `dist/ProcessadorNF.exe`. Não requer instalação — basta distribuir o `.exe`.
 
-### 4.6 Deploy no VPS
+### 5.6 Deploy no VPS
 
 ```bash
-# Subir todos os serviços
+# Subir todos os serviços permanentes
 cd /opt/portal
 docker compose up -d
 
-# Reconstruir apenas a API após mudanças
+# Reconstruir um serviço após mudanças
 docker compose up -d --build api
+docker compose build cleaner && docker compose up -d cleaner
+
+# Executar scraper/cleaner manualmente
+docker compose run --rm portal-municipal-mao
+docker compose run --rm cleaner
+docker compose run --rm portal-estado-am
+docker compose run --rm cleaner-estado-am
 
 # Ver logs em tempo real
 docker compose logs -f portal-api
@@ -299,38 +353,48 @@ docker compose logs -f portal-api
 docker compose ps
 ```
 
-### 4.7 Estrutura do Repositório
+### 5.7 Estrutura do Repositório
 
 ```
 PROJETO-SOCRATES-VPS/
-├── main.py                  # Entry point FastAPI
-├── auth.py                  # Validação de API keys
-├── Dockerfile               # Build da portal-api
-├── docker-compose.yml       # Orquestração completa
+├── main.py                        # Entry point FastAPI
+├── auth.py                        # Validação de API keys
+├── Dockerfile                     # Build da portal-api
+├── docker-compose.yml             # Orquestração completa
 ├── .gitignore
 │
 ├── routers/
 │   ├── portal_municipal_manaus.py
 │   └── portal_estado_am.py
 │
-├── ProcessadorNF/           # Código-fonte do cliente Windows
+├── ProcessadorNF/                 # Código-fonte do cliente Windows
 │   ├── app.py
 │   ├── extractor.py
 │   ├── pdf_reader.py
 │   ├── supabase_client.py
 │   └── utils.py
 │
-├── aristoteles/             # Watcher Docker (legado)
-├── cleaner/                 # ETL de pagamentos
-├── socrates/                # Scraper SEFAZ (socrates)
-├── portal-estado-am/        # Scraper SEFAZ (estado AM)
+├── cleaner/                       # ETL public.pagamentos
+│   ├── cleaner.py
+│   ├── cleaner_config.json        # ← não versionado (credenciais)
+│   └── Dockerfile
+│
+├── cleaner-estado-am/             # ETL portal_estado_am.pagamentos
+│   ├── cleaner_estado_am.py
+│   ├── cleaner_estado_am_config.json  # ← não versionado (credenciais)
+│   └── Dockerfile
+│
+├── aristoteles/                   # Watcher PDF (desativado)
+├── portal-estado-am/              # Scraper SEFAZ Estadual
+├── socrates/                      # Scraper SEFAZ Municipal (novo7.py)
 └── scripts/
-    └── sync_procmail.py     # Sincronização de filtros de e-mail
+    ├── sync_procmail.py           # Sincronização de filtros de e-mail
+    └── platao.sh                  # Disparo manual via e-mail
 ```
 
 ---
 
-## 5. Fluxograma
+## 6. Fluxograma
 
 ### Fluxo Principal — ProcessadorNF
 
@@ -399,24 +463,23 @@ flowchart LR
     F -->|rowcount = 0| H[status: duplicata]
 ```
 
-### Fluxo de Coleta — Portal Estado AM
+### Fluxo de Coleta e ETL — Portal Estado AM
 
 ```mermaid
 flowchart TD
-    A([Container inicia]) --> B[Lê conf de portal_estado_am.conf]
-    B --> C[Abre Playwright / Chromium headless]
-    C --> D[Para cada CNPJ configurado]
-    D --> E[Navega para SEFAZ Transparência]
-    E --> F[Preenche formulário de busca]
-    F --> G[Coleta lista de pagamentos]
-    G --> H[Para cada pagamento]
-    H --> I{num_ob já existe\nno banco?}
-    I -- Sim --> J[Ignora]
-    I -- Não --> K[Acessa detalhes\nColeta NL e empenhos]
-    K --> L[Insere em pagamentos\ne nl_itens]
-    L --> H
-    J --> H
-    H -- Fim da lista --> D
-    D -- Todos CNPJs --> M[Registra em execucao_logs]
-    M --> N([Execução concluída])
+    A([Cron 02:00]) --> B[portal-estado-am\nPlaywright SEFAZ]
+    B --> C[Para cada CNPJ configurado]
+    C --> D{num_ob já existe?}
+    D -- Sim --> E[Ignora]
+    D -- Não --> F[Insere em\nportal_estado_am.pagamentos]
+    F --> C
+    E --> C
+    C -- Todos CNPJs --> G{Saiu sem erro?}
+    G -- Não --> H([Cleaner não executa])
+    G -- Sim --> I[portal-cleaner-estado-am]
+    I --> J[SELECT pagamentos\nWHERE treatment IS NULL]
+    J --> K[Parseia descricao_ob:\nnl_numero, nf_numero, nf_data\nmes_ref, processo, contrato]
+    K --> L[INSERT pagamentos_treated\nON CONFLICT DO NOTHING]
+    L --> M[UPDATE treatment = success]
+    M --> N([ETL concluído])
 ```
