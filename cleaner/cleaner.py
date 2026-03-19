@@ -140,7 +140,10 @@ def parse_descricao(value):
     if m:
         result["nf_numero"] = m.group(1)
 
-    m = re.search(r'\((\d{2}/\d{2}/\d{2,4})\)', value)
+    # Tenta "DATA DA NFS-E: DD/MM/YYYY" primeiro, depois primeira data válida na string
+    _DATA_NF = re.search(r'DATA\s+DA\s+NF[Ss]?-?[Ee]?\s*:?\s*(\d{2}/\d{2}/\d{4})', value, re.IGNORECASE)
+    _DATA_ANY = re.search(r'\b((?:0[1-9]|[12]\d|3[01])/(?:0[1-9]|1[0-2])/\d{4})\b', value)
+    m = _DATA_NF or _DATA_ANY
     if m:
         result["nf_data"] = m.group(1)
 
