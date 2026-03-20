@@ -9,7 +9,7 @@ Sistema integrado de captura, processamento e armazenamento de documentos fiscai
 1. [Visão Geral](#1-visão-geral)
 2. [Arquitetura](#2-arquitetura)
 3. [Fluxo de Dados](#3-fluxo-de-dados)
-4. [Agendamento (Cron)](#4-agendamento-cron)
+4. [Agendamento e Disparo](#4-agendamento-e-disparo)
 5. [Guia de Configuração](#5-guia-de-configuração)
 6. [Fluxograma](#6-fluxograma)
 
@@ -59,7 +59,7 @@ O sistema automatiza o ciclo completo de tratamento de documentos fiscais emitid
 │  ┌─────────────────────────────────────────────────────────┐    │
 │  │  ProcessadorNF (app.py)                                  │    │
 │  │  GUI Tkinter · Multi-perfil · Autenticação SMB           │    │
-│  │  Extração PDF · Envio via HTTP para Portal API           │    │
+│  │  Extração PDF · Envio de notas · Disparo de scrapers     │    │
 │  └──────────────────────────┬───────────────────────────────┘    │
 └─────────────────────────────┼────────────────────────────────────┘
                               │ HTTP POST x-api-key
@@ -70,7 +70,9 @@ O sistema automatiza o ciclo completo de tratamento de documentos fiscais emitid
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │  portal-api (FastAPI · porta 9000)                        │   │
 │  │  ├── /portal-municipal-manaus/faturamento                 │   │
-│  │  └── /portal-estado-am/faturamento (+ pagamentos, logs)  │   │
+│  │  ├── /portal-estado-am/faturamento (+ pagamentos, logs)  │   │
+│  │  ├── /portal-municipal-manaus/trigger  ◄── disparo manual│   │
+│  │  └── /portal-estado-am/trigger         ◄── disparo manual│   │
 │  └──────────────────────────┬─────────────────────────────── ┘  │
 │                             │                                    │
 │  ┌──────────────────────────▼─────────────────────────────── ┐  │
@@ -161,7 +163,7 @@ O sistema automatiza o ciclo completo de tratamento de documentos fiscais emitid
 
 ### 3.3 Scraping Portal Municipal Manaus (portal-municipal-mao)
 
-**Ator:** Cron 02:00 seg–sex / disparo por e-mail via platao.sh
+**Ator:** Cron 02:00 seg–sex / botão "Atualizar Portal Municipal" no ProcessadorNF
 
 ```
 1. Carrega configurações das tabelas conf, conf_cpfs, conf_exercicios
@@ -170,24 +172,26 @@ O sistema automatiza o ciclo completo de tratamento de documentos fiscais emitid
    b. Coleta empenhos e pagamentos
    c. Verifica cache de números já existentes
    d. Insere novos registros em public.pagamentos
-3. Envia notificação por e-mail aos destinatários em conf_emails
+3. Envia e-mail de conclusão aos destinatários em public.conf_emails WHERE ativo=TRUE
 ```
 
 ### 3.4 Scraping Portal Estado AM (portal-estado-am)
 
-**Ator:** Cron 02:00 seg–sex
+**Ator:** Cron 02:00 seg–sex / botão "Atualizar Portal Estado AM" no ProcessadorNF
 
 ```
-1. Lê configurações da tabela portal_estado_am.conf (exercicio, mês, credores)
-2. Abre browser Playwright (Chromium headless)
-3. Navega para portal SEFAZ/AM transparência
-4. Para cada CNPJ/CPF configurado:
-   a. Preenche formulário de busca
-   b. Coleta lista de pagamentos (num_ob, orgão, valor, datas)
-   c. Para cada pagamento, acessa detalhes e coleta NL e empenhos
-   d. Verifica duplicata antes de inserir (num_ob / num_nl)
-   e. Insere em portal_estado_am.pagamentos e nl_itens
+1. Lê exercícios de portal_estado_am.conf_exercicios WHERE ativo=TRUE
+2. Lê credores de portal_estado_am.conf_cpfs WHERE ativo=TRUE
+3. Abre browser Playwright (Chromium headless)
+4. Para cada credor × exercício × mês:
+   a. Navega para portal SEFAZ/AM transparência
+   b. Preenche formulário com CNPJ e período
+   c. Coleta lista de pagamentos (num_ob, orgão, valor, datas)
+   d. Para cada pagamento, acessa detalhes e coleta NL e empenhos
+   e. Verifica duplicata antes de inserir (num_ob / num_nl)
+   f. Insere em portal_estado_am.pagamentos e nl_itens
 5. Registra execução em portal_estado_am.execucao_logs
+6. Envia e-mail de conclusão aos destinatários em portal_estado_am.conf_emails WHERE ativo=TRUE
 ```
 
 ### 3.5 ETL Portal Municipal (portal-cleaner)
@@ -224,7 +228,9 @@ O sistema automatiza o ciclo completo de tratamento de documentos fiscais emitid
 
 ---
 
-## 4. Agendamento (Cron)
+## 4. Agendamento e Disparo
+
+### 4.1 Cron (automático)
 
 ```
 # Scraping + ETL — Portal Municipal Manaus (sequencial)
@@ -232,16 +238,22 @@ O sistema automatiza o ciclo completo de tratamento de documentos fiscais emitid
 
 # Scraping + ETL — Portal Estado AM (sequencial)
 0 2 * * 1-5   portal-estado-am  &&  portal-cleaner-estado-am
-
-# Disparo manual por e-mail (qualquer horário)
-*             sync_procmail verifica conf_emails a cada hora
-              e-mail "atualizar portal" → platao.sh → portal-municipal-mao
-
-# Sincronização de filtros de e-mail
-0 * * * *     sync_procmail.py
 ```
 
 > O operador `&&` garante que o cleaner só executa se o scraper terminar **sem erro**.
+
+### 4.2 Disparo Manual via ProcessadorNF
+
+Os scrapers podem ser disparados a qualquer momento diretamente pela interface do ProcessadorNF, na seção **"Disparo de Scrapers"**:
+
+| Botão | Endpoint chamado | Serviço disparado |
+|---|---|---|
+| Atualizar Portal Municipal | `POST /portal-municipal-manaus/trigger` | `portal-municipal-mao` |
+| Atualizar Portal Estado AM | `POST /portal-estado-am/trigger` | `portal-estado-am` |
+
+O endpoint verifica se o container já está rodando antes de disparar, evitando execuções simultâneas. A resposta é imediata (`{"status": "iniciado"}` ou `{"status": "ja_rodando"}`). O resultado da coleta chega por e-mail ao concluir.
+
+A `portal-api` dispara os containers via Docker CLI (socket montado em `/var/run/docker.sock`).
 
 ---
 
@@ -305,8 +317,10 @@ A tela de configuração é protegida por senha. Para adicionar/editar perfis, a
 | `GET` | `/health` | Verifica se a API está no ar |
 | `POST` | `/portal-municipal-manaus/faturamento` | Insere NFS-e municipal |
 | `GET` | `/portal-municipal-manaus/faturamento/existe/{numero}` | Verifica duplicata |
+| `POST` | `/portal-municipal-manaus/trigger` | Dispara scraper municipal |
 | `POST` | `/portal-estado-am/faturamento` | Insere NFS-e estadual |
 | `GET` | `/portal-estado-am/faturamento/existe/{numero}` | Verifica duplicata |
+| `POST` | `/portal-estado-am/trigger` | Dispara scraper estadual |
 | `GET` | `/portal-estado-am/pagamentos` | Lista pagamentos (filtros: exercicio, mes, orgao) |
 | `GET` | `/portal-estado-am/nl-itens` | Lista empenhos/NL |
 | `GET` | `/portal-estado-am/resumo` | Totais e métricas |
@@ -365,7 +379,8 @@ PROJETO-SOCRATES-VPS/
 │
 ├── routers/
 │   ├── portal_municipal_manaus.py
-│   └── portal_estado_am.py
+│   ├── portal_estado_am.py
+│   └── trigger.py                 # Endpoints de disparo manual
 │
 ├── ProcessadorNF/                 # Código-fonte do cliente Windows
 │   ├── app.py
@@ -387,9 +402,7 @@ PROJETO-SOCRATES-VPS/
 ├── aristoteles/                   # Watcher PDF (desativado)
 ├── portal-estado-am/              # Scraper SEFAZ Estadual
 ├── socrates/                      # Scraper SEFAZ Municipal (novo7.py)
-└── scripts/
-    ├── sync_procmail.py           # Sincronização de filtros de e-mail
-    └── platao.sh                  # Disparo manual via e-mail
+└── scripts/                       # (vazio — disparo migrado para portal-api/trigger)
 ```
 
 ---
@@ -463,23 +476,27 @@ flowchart LR
     F -->|rowcount = 0| H[status: duplicata]
 ```
 
-### Fluxo de Coleta e ETL — Portal Estado AM
+### Fluxo de Disparo e Coleta — Scrapers
 
 ```mermaid
 flowchart TD
-    A([Cron 02:00]) --> B[portal-estado-am\nPlaywright SEFAZ]
-    B --> C[Para cada CNPJ configurado]
-    C --> D{num_ob já existe?}
-    D -- Sim --> E[Ignora]
-    D -- Não --> F[Insere em\nportal_estado_am.pagamentos]
-    F --> C
-    E --> C
-    C -- Todos CNPJs --> G{Saiu sem erro?}
-    G -- Não --> H([Cleaner não executa])
-    G -- Sim --> I[portal-cleaner-estado-am]
-    I --> J[SELECT pagamentos\nWHERE treatment IS NULL]
-    J --> K[Parseia descricao_ob:\nnl_numero, nf_numero, nf_data\nmes_ref, processo, contrato]
-    K --> L[INSERT pagamentos_treated\nON CONFLICT DO NOTHING]
-    L --> M[UPDATE treatment = success]
+    A([Cron 02:00]) --> C
+    B([ProcessadorNF\nbotão Disparo]) -->|POST /trigger\nx-api-key| P[portal-api]
+    P --> Q{container\njá rodando?}
+    Q -- Sim --> R([ja_rodando])
+    Q -- Não --> C[portal-estado-am\nou portal-municipal-mao]
+
+    C --> D[Para cada credor × exercício × mês]
+    D --> E{num_ob já existe?}
+    E -- Sim --> F[Ignora]
+    E -- Não --> G[Insere em pagamentos\ne nl_itens]
+    G --> D
+    F --> D
+    D -- Todos concluídos --> H[Registra execucao_logs]
+    H --> I[Envia e-mail de conclusão\npara conf_emails WHERE ativo=TRUE]
+    I --> J{Saiu sem erro?}
+    J -- Não --> K([Cleaner não executa])
+    J -- Sim --> L[portal-cleaner\nou portal-cleaner-estado-am]
+    L --> M[Parseia descricao_ob\nInsere em pagamentos_treated]
     M --> N([ETL concluído])
 ```

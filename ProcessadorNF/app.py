@@ -12,6 +12,8 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, scrolledtext, simpledialog, ttk
 
+import requests
+
 from extractor import extrair_dados
 from pdf_reader import extrair_texto
 from supabase_client import SupabaseClient
@@ -165,6 +167,30 @@ def processar_perfil(perfil: dict, log_fn, progress_fn):
                 pass
 
     log_fn(f'[{nome}] Concluido: {inseridos} inserido(s) | {duplicatas} duplicata(s) | {erros} erro(s)')
+
+
+def disparar_scraper(portal: str, api_key: str, log_fn, btn):
+    endpoint = portal.replace('_', '-')
+    try:
+        resp = requests.post(
+            f'{_API_URL}/{endpoint}/trigger',
+            headers={'x-api-key': api_key},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        status = data.get('status')
+        servico = data.get('servico', endpoint)
+        if status == 'iniciado':
+            log_fn(f'[Scraper] {servico} iniciado com sucesso.')
+        elif status == 'ja_rodando':
+            log_fn(f'[Scraper] {servico} ja esta rodando.')
+        else:
+            log_fn(f'[Scraper] Resposta inesperada: {data}')
+    except Exception as e:
+        log_fn(f'[Scraper] ERRO ao disparar {endpoint}: {e}')
+    finally:
+        btn.config(state=tk.NORMAL)
 
 
 def processar(perfis_selecionados, log_fn, progress_fn, btn):
@@ -350,6 +376,25 @@ class App(tk.Tk):
                   relief='flat', cursor='hand2',
                   command=self._abrir_config).pack(anchor='e', padx=8, pady=4)
 
+        frame_scraper = tk.LabelFrame(self, text='Disparo de Scrapers', font=('Segoe UI', 9))
+        frame_scraper.pack(fill='x', padx=12, pady=4)
+        frame_scraper_btns = tk.Frame(frame_scraper)
+        frame_scraper_btns.pack(padx=8, pady=6)
+        self._btn_mun = tk.Button(
+            frame_scraper_btns, text='Atualizar Portal Municipal',
+            font=('Segoe UI', 9), relief='flat', padx=10, pady=4,
+            bg='#0369a1', fg='white', cursor='hand2',
+            command=self._disparar_municipal,
+        )
+        self._btn_mun.pack(side='left', padx=4)
+        self._btn_est = tk.Button(
+            frame_scraper_btns, text='Atualizar Portal Estado AM',
+            font=('Segoe UI', 9), relief='flat', padx=10, pady=4,
+            bg='#7c3aed', fg='white', cursor='hand2',
+            command=self._disparar_estado,
+        )
+        self._btn_est.pack(side='left', padx=4)
+
         self._progress = ttk.Progressbar(self, length=460, mode='determinate')
         self._progress.pack(**pad)
         self._lbl_progress = tk.Label(self, text='', font=('Segoe UI', 8))
@@ -425,6 +470,24 @@ class App(tk.Tk):
         self._progress['maximum'] = total
         self._progress['value']   = atual
         self._lbl_progress.config(text=f'{atual} / {total}')
+
+    def _disparar_municipal(self):
+        self._btn_mun.config(state=tk.DISABLED)
+        threading.Thread(
+            target=disparar_scraper,
+            args=('portal-municipal-manaus', _API_KEYS['portal_municipal_manaus'],
+                  self._log_write, self._btn_mun),
+            daemon=True,
+        ).start()
+
+    def _disparar_estado(self):
+        self._btn_est.config(state=tk.DISABLED)
+        threading.Thread(
+            target=disparar_scraper,
+            args=('portal-estado-am', _API_KEYS['portal_estado_am'],
+                  self._log_write, self._btn_est),
+            daemon=True,
+        ).start()
 
     def _iniciar(self):
         perfis_selecionados = [p for var, p in self._perfis_vars if var.get()]
