@@ -356,12 +356,24 @@ class App(tk.Tk):
         self._atualizar_perfis()
 
     def _build_ui(self):
+        notebook = ttk.Notebook(self)
+        notebook.pack(fill='both', expand=True, padx=4, pady=4)
+
+        tab_principal = tk.Frame(notebook)
+        notebook.add(tab_principal, text='Principal')
+        self._build_tab_principal(tab_principal)
+
+        tab_conf = tk.Frame(notebook)
+        notebook.add(tab_conf, text='Configurações BD')
+        self._build_tab_conf(tab_conf)
+
+    def _build_tab_principal(self, frame):
         pad = {'padx': 12, 'pady': 6}
 
-        tk.Label(self, text='Processador de Notas Fiscais',
+        tk.Label(frame, text='Processador de Notas Fiscais',
                  font=('Segoe UI', 13, 'bold')).pack(**pad)
 
-        frame_perfis = tk.LabelFrame(self, text='Perfis', font=('Segoe UI', 9))
+        frame_perfis = tk.LabelFrame(frame, text='Perfis', font=('Segoe UI', 9))
         frame_perfis.pack(fill='x', padx=12, pady=4)
 
         self._perfis_vars = []
@@ -376,7 +388,7 @@ class App(tk.Tk):
                   relief='flat', cursor='hand2',
                   command=self._abrir_config).pack(anchor='e', padx=8, pady=4)
 
-        frame_scraper = tk.LabelFrame(self, text='Disparo de Scrapers', font=('Segoe UI', 9))
+        frame_scraper = tk.LabelFrame(frame, text='Disparo de Scrapers', font=('Segoe UI', 9))
         frame_scraper.pack(fill='x', padx=12, pady=4)
         frame_scraper_btns = tk.Frame(frame_scraper)
         frame_scraper_btns.pack(padx=8, pady=6)
@@ -395,13 +407,13 @@ class App(tk.Tk):
         )
         self._btn_est.pack(side='left', padx=4)
 
-        self._progress = ttk.Progressbar(self, length=460, mode='determinate')
+        self._progress = ttk.Progressbar(frame, length=460, mode='determinate')
         self._progress.pack(**pad)
-        self._lbl_progress = tk.Label(self, text='', font=('Segoe UI', 8))
+        self._lbl_progress = tk.Label(frame, text='', font=('Segoe UI', 8))
         self._lbl_progress.pack()
 
         self._btn = tk.Button(
-            self, text='Processar PDFs',
+            frame, text='Processar PDFs',
             font=('Segoe UI', 11, 'bold'),
             bg='#2563eb', fg='white',
             activebackground='#1d4ed8',
@@ -411,7 +423,7 @@ class App(tk.Tk):
         )
         self._btn.pack(**pad)
 
-        frame_log = tk.LabelFrame(self, text='Log', font=('Segoe UI', 9))
+        frame_log = tk.LabelFrame(frame, text='Log', font=('Segoe UI', 9))
         frame_log.pack(fill='both', expand=True, padx=12, pady=4)
         self._log = scrolledtext.ScrolledText(
             frame_log, height=14, width=64,
@@ -419,8 +431,249 @@ class App(tk.Tk):
         )
         self._log.pack(padx=4, pady=4)
 
-        tk.Button(self, text='Limpar log', font=('Segoe UI', 8),
+        tk.Button(frame, text='Limpar log', font=('Segoe UI', 8),
                   command=self._limpar_log).pack(pady=(0, 8))
+
+    def _build_tab_conf(self, frame):
+        # ── Scrollable container ───────────────────────────────────────────────
+        canvas = tk.Canvas(frame, borderwidth=0, highlightthickness=0)
+        vsb = ttk.Scrollbar(frame, orient='vertical', command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side='right', fill='y')
+        canvas.pack(side='left', fill='both', expand=True)
+
+        inner = tk.Frame(canvas)
+        inner_id = canvas.create_window((0, 0), window=inner, anchor='nw')
+
+        inner.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.bind('<Configure>', lambda e: canvas.itemconfig(inner_id, width=e.width))
+        canvas.bind_all('<MouseWheel>', lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units'))
+
+        # ── Seletor de portal ──────────────────────────────────────────────────
+        top = tk.Frame(inner)
+        top.pack(fill='x', padx=12, pady=(10, 4))
+        tk.Label(top, text='Portal:', font=('Segoe UI', 10, 'bold')).pack(side='left')
+        self._conf_portal_var = tk.StringVar(value='municipal')
+        for txt, val in [('Municipal', 'municipal'), ('Estado AM', 'estado-am')]:
+            tk.Radiobutton(
+                top, text=txt, variable=self._conf_portal_var, value=val,
+                font=('Segoe UI', 9), command=self._conf_carregar,
+            ).pack(side='left', padx=8)
+        tk.Button(top, text='Recarregar', font=('Segoe UI', 8), relief='flat',
+                  cursor='hand2', padx=8, pady=2,
+                  command=self._conf_carregar).pack(side='right', padx=4)
+
+        # ── Configuração Geral ─────────────────────────────────────────────────
+        frame_geral = tk.LabelFrame(inner, text='Configuração Geral (conf)', font=('Segoe UI', 9))
+        frame_geral.pack(fill='x', padx=12, pady=4)
+
+        row_url = tk.Frame(frame_geral)
+        row_url.pack(fill='x', padx=8, pady=(6, 2))
+        tk.Label(row_url, text='URL Base:', font=('Segoe UI', 9), width=12, anchor='w').pack(side='left')
+        self._conf_url_var = tk.StringVar()
+        tk.Entry(row_url, textvariable=self._conf_url_var, font=('Segoe UI', 9), width=48).pack(side='left', padx=4)
+
+        tk.Button(row_url, text='Salvar', bg='#2563eb', fg='white', relief='flat',
+                  font=('Segoe UI', 8), padx=10, pady=2, cursor='hand2',
+                  command=self._conf_salvar_geral).pack(side='left', padx=4)
+
+        # ── E-mails ────────────────────────────────────────────────────────────
+        frame_email = tk.LabelFrame(inner, text='E-mails (conf_emails)', font=('Segoe UI', 9))
+        frame_email.pack(fill='x', padx=12, pady=4)
+
+        cols_email = ('ID', 'E-mail', 'Ativo')
+        self._tv_email = ttk.Treeview(frame_email, columns=cols_email, show='headings', height=3)
+        for col, width, anchor in [('ID', 40, 'center'), ('E-mail', 260, 'w'), ('Ativo', 50, 'center')]:
+            self._tv_email.heading(col, text=col)
+            self._tv_email.column(col, width=width, anchor=anchor)
+        self._tv_email.pack(side='left', fill='x', padx=(4, 0), pady=4)
+
+        btn_email = tk.Frame(frame_email)
+        btn_email.pack(side='left', padx=8)
+        for txt, bg, fg, cmd in [
+            ('+ Adicionar',      '#16a34a', 'white', self._conf_add_email),
+            ('Ativar/Desativar', '#475569', 'white', self._conf_toggle_email),
+        ]:
+            tk.Button(btn_email, text=txt, bg=bg, fg=fg, relief='flat',
+                      font=('Segoe UI', 8), padx=8, pady=4, cursor='hand2',
+                      command=cmd).pack(pady=3)
+
+        # ── Credores ───────────────────────────────────────────────────────────
+        frame_cred = tk.LabelFrame(inner, text='Credores (conf_cpfs)', font=('Segoe UI', 9))
+        frame_cred.pack(fill='x', padx=12, pady=4)
+
+        cols_cred = ('ID', 'CPF/CNPJ', 'Nome', 'Ativo')
+        self._tv_cred = ttk.Treeview(frame_cred, columns=cols_cred, show='headings', height=5)
+        for col, width, anchor in [
+            ('ID', 40, 'center'), ('CPF/CNPJ', 130, 'w'),
+            ('Nome', 190, 'w'),   ('Ativo', 50, 'center'),
+        ]:
+            self._tv_cred.heading(col, text=col)
+            self._tv_cred.column(col, width=width, anchor=anchor)
+        self._tv_cred.pack(side='left', fill='x', padx=(4, 0), pady=4)
+
+        btn_cred = tk.Frame(frame_cred)
+        btn_cred.pack(side='left', padx=8)
+        for txt, bg, fg, cmd in [
+            ('+ Adicionar',      '#16a34a', 'white', self._conf_add_credor),
+            ('Ativar/Desativar', '#475569', 'white', self._conf_toggle_credor),
+        ]:
+            tk.Button(btn_cred, text=txt, bg=bg, fg=fg, relief='flat',
+                      font=('Segoe UI', 8), padx=8, pady=4, cursor='hand2',
+                      command=cmd).pack(pady=3)
+
+        # ── Exercícios ─────────────────────────────────────────────────────────
+        frame_ex = tk.LabelFrame(inner, text='Exercícios (conf_exercicios)', font=('Segoe UI', 9))
+        frame_ex.pack(fill='x', padx=12, pady=4)
+
+        cols_ex = ('ID', 'Exercício', 'Ativo')
+        self._tv_ex = ttk.Treeview(frame_ex, columns=cols_ex, show='headings', height=3)
+        for col, width in [('ID', 40), ('Exercício', 100), ('Ativo', 60)]:
+            self._tv_ex.heading(col, text=col)
+            self._tv_ex.column(col, width=width, anchor='center')
+        self._tv_ex.pack(side='left', fill='x', padx=(4, 0), pady=4)
+
+        btn_ex = tk.Frame(frame_ex)
+        btn_ex.pack(side='left', padx=8)
+        for txt, bg, fg, cmd in [
+            ('+ Adicionar',      '#16a34a', 'white', self._conf_add_exercicio),
+            ('Ativar/Desativar', '#475569', 'white', self._conf_toggle_exercicio),
+        ]:
+            tk.Button(btn_ex, text=txt, bg=bg, fg=fg, relief='flat',
+                      font=('Segoe UI', 8), padx=8, pady=4, cursor='hand2',
+                      command=cmd).pack(pady=3)
+
+        # ── Status ─────────────────────────────────────────────────────────────
+        self._conf_status = tk.Label(inner, text='', font=('Segoe UI', 8), fg='gray')
+        self._conf_status.pack(pady=(2, 8))
+
+        self._conf_carregar()
+
+    # ── Helpers da aba Configurações ──────────────────────────────────────────
+
+    def _conf_api_call(self, method: str, path: str, **kwargs):
+        portal = self._conf_portal_var.get()
+        key = _API_KEYS['portal_municipal_manaus' if portal == 'municipal' else 'portal_estado_am']
+        url = f'{_API_URL}/conf/{portal}/{path}'
+        resp = requests.request(method, url, headers={'x-api-key': key}, timeout=10, **kwargs)
+        resp.raise_for_status()
+        return resp.json()
+
+    def _conf_carregar(self):
+        self._conf_status.config(text='Carregando...', fg='gray')
+        self.update_idletasks()
+        try:
+            geral      = self._conf_api_call('GET', 'geral')
+            emails     = self._conf_api_call('GET', 'emails')
+            credores   = self._conf_api_call('GET', 'credores')
+            exercicios = self._conf_api_call('GET', 'exercicios')
+
+            self._conf_url_var.set(geral.get('url_base', ''))
+
+            self._tv_email.delete(*self._tv_email.get_children())
+            for e in emails:
+                self._tv_email.insert('', 'end', values=(
+                    e['id'], e['email'], 'Sim' if e['ativo'] else 'Não',
+                ))
+
+            self._tv_cred.delete(*self._tv_cred.get_children())
+            for c in credores:
+                self._tv_cred.insert('', 'end', values=(
+                    c['id'], c['cpf_cnpj'],
+                    c.get('nome_credor') or '',
+                    'Sim' if c['ativo'] else 'Não',
+                ))
+
+            self._tv_ex.delete(*self._tv_ex.get_children())
+            for e in exercicios:
+                self._tv_ex.insert('', 'end', values=(
+                    e['id'], e['exercicio'], 'Sim' if e['ativo'] else 'Não',
+                ))
+
+            self._conf_status.config(
+                text=f'{len(emails)} e-mail(s)  |  {len(credores)} credor(es)  |  {len(exercicios)} exercício(s)',
+                fg='#16a34a',
+            )
+        except Exception as ex:
+            self._conf_status.config(text=f'Erro: {ex}', fg='red')
+
+    def _conf_salvar_geral(self):
+        try:
+            self._conf_api_call('PUT', 'geral', json={
+                'url_base': self._conf_url_var.get().strip(),
+                'modo_limpar': False,
+            })
+            self._conf_status.config(text='Configuração salva.', fg='#16a34a')
+        except Exception as ex:
+            messagebox.showerror('Erro', str(ex), parent=self)
+
+    def _conf_add_email(self):
+        email = simpledialog.askstring('Novo E-mail', 'E-mail:', parent=self)
+        if not email:
+            return
+        try:
+            self._conf_api_call('POST', 'emails', json={'email': email.strip()})
+            self._conf_carregar()
+        except Exception as ex:
+            messagebox.showerror('Erro', str(ex), parent=self)
+
+    def _conf_toggle_email(self):
+        sel = self._tv_email.selection()
+        if not sel:
+            messagebox.showwarning('Aviso', 'Selecione um e-mail.', parent=self)
+            return
+        email_id = self._tv_email.item(sel[0])['values'][0]
+        try:
+            self._conf_api_call('PATCH', f'emails/{email_id}/toggle')
+            self._conf_carregar()
+        except Exception as ex:
+            messagebox.showerror('Erro', str(ex), parent=self)
+
+    def _conf_add_credor(self):
+        cnpj = simpledialog.askstring('Novo Credor', 'CPF/CNPJ:', parent=self)
+        if not cnpj:
+            return
+        nome = simpledialog.askstring('Novo Credor', 'Nome do credor:', parent=self)
+        try:
+            self._conf_api_call('POST', 'credores',
+                                json={'cpf_cnpj': cnpj.strip(), 'nome_credor': nome})
+            self._conf_carregar()
+        except Exception as ex:
+            messagebox.showerror('Erro', str(ex), parent=self)
+
+    def _conf_toggle_credor(self):
+        sel = self._tv_cred.selection()
+        if not sel:
+            messagebox.showwarning('Aviso', 'Selecione um credor.', parent=self)
+            return
+        credor_id = self._tv_cred.item(sel[0])['values'][0]
+        try:
+            self._conf_api_call('PATCH', f'credores/{credor_id}/toggle')
+            self._conf_carregar()
+        except Exception as ex:
+            messagebox.showerror('Erro', str(ex), parent=self)
+
+    def _conf_add_exercicio(self):
+        ano = simpledialog.askstring('Novo Exercício', 'Ano (ex: 2026):', parent=self)
+        if not ano:
+            return
+        try:
+            self._conf_api_call('POST', 'exercicios', json={'exercicio': ano.strip()})
+            self._conf_carregar()
+        except Exception as ex:
+            messagebox.showerror('Erro', str(ex), parent=self)
+
+    def _conf_toggle_exercicio(self):
+        sel = self._tv_ex.selection()
+        if not sel:
+            messagebox.showwarning('Aviso', 'Selecione um exercício.', parent=self)
+            return
+        ex_id = self._tv_ex.item(sel[0])['values'][0]
+        try:
+            self._conf_api_call('PATCH', f'exercicios/{ex_id}/toggle')
+            self._conf_carregar()
+        except Exception as ex:
+            messagebox.showerror('Erro', str(ex), parent=self)
 
     def _atualizar_perfis(self):
         for w in self._frame_checks.winfo_children():
