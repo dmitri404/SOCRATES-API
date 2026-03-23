@@ -8,6 +8,7 @@ _COMPOSE_FILE = "/opt/portal/docker-compose.yml"
 _SERVICES = {
     "portal-municipal-manaus": "portal-municipal-mao",
     "portal-estado-am":        "portal-estado-am",
+    "portal-estado-ms":        "portal-estado-ms",
 }
 
 
@@ -39,9 +40,19 @@ def trigger_municipal(x_api_key: str = Header(...)):
 
 
 @router.post("/portal-estado-am/trigger")
-def trigger_estado(x_api_key: str = Header(...)):
+def trigger_estado_am(x_api_key: str = Header(...)):
     verificar_api_key("portal_estado_am", x_api_key)
     service = _SERVICES["portal-estado-am"]
+    if _esta_rodando(service):
+        return {"status": "ja_rodando", "servico": service}
+    _disparar(service)
+    return {"status": "iniciado", "servico": service}
+
+
+@router.post("/portal-estado-ms/trigger")
+def trigger_estado_ms(x_api_key: str = Header(...)):
+    verificar_api_key("portal_estado_ms", x_api_key)
+    service = _SERVICES["portal-estado-ms"]
     if _esta_rodando(service):
         return {"status": "ja_rodando", "servico": service}
     _disparar(service)

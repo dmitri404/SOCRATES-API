@@ -1,0 +1,26 @@
+# ──────────────────────────────────────────────────────────────
+# ADICIONAR ao docker-compose.yml do PROJETO-SOCRATES-VPS
+# dentro do bloco "services:"
+# ──────────────────────────────────────────────────────────────
+
+  portal-estado-ms:
+    build: ./portal-estado-ms
+    container_name: portal-estado-ms
+    restart: no
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      - TZ=America/Campo_Grande
+      - SUPABASE_DB_HOST=supabase-db
+      - SUPABASE_DB_PORT=5432
+      - SUPABASE_DB_NAME=postgres
+      - SUPABASE_DB_USER=postgres
+      - SUPABASE_DB_PASSWORD=<senha>
+    networks:
+      - portal_default
+      - supabase_default
+
+# ──────────────────────────────────────────────────────────────
+# ADICIONAR ao servico "api" (em environment:)
+# ──────────────────────────────────────────────────────────────
+#     - API_KEY_PORTAL_ESTADO_MS=estms-<gerar-uuid-aqui>
