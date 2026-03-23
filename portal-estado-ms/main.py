@@ -15,7 +15,6 @@ import sys
 import io
 import os
 import time
-from calendar import monthrange
 from datetime import date
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True)
@@ -117,7 +116,10 @@ def inserir_empenho(conn, exercicio: str, mes: str, ne: dict,
                  %(fonte_recursos)s, %(natureza_despesa)s,
                  %(elemento_despesa)s, %(elemento_despesa_id)s, %(tipo_licitacao)s,
                  %(empenhado)s, %(liquidado)s, %(pago)s)
-            ON CONFLICT (num_ne, ug_codigo) WHERE num_ne IS NOT NULL AND ug_codigo IS NOT NULL DO NOTHING
+            ON CONFLICT (num_ne, ug_codigo) WHERE num_ne IS NOT NULL AND ug_codigo IS NOT NULL
+            DO UPDATE SET empenhado = EXCLUDED.empenhado,
+                          liquidado = EXCLUDED.liquidado,
+                          pago      = EXCLUDED.pago
         """, {
             "exercicio":          exercicio,
             "mes":                mes,
@@ -142,33 +144,33 @@ def inserir_empenho(conn, exercicio: str, mes: str, ne: dict,
             "pago":               ne.get("totalPago"),
         })
         conn.commit()
-        inserted = cur.rowcount
+        # xmax=0 significa insert; xmax>0 significa update
+        cur.execute("SELECT xmax, id FROM portal_estado_ms.empenhos WHERE num_ne = %s AND ug_codigo = %s",
+                    (num_ne, ug_codigo))
+        row = cur.fetchone()
+        is_new = row and int(row[0]) == 0
 
-        if inserted and docs:
-            cur.execute(
-                "SELECT id FROM portal_estado_ms.empenhos WHERE num_ne = %s AND ug_codigo = %s",
-                (num_ne, ug_codigo),
-            )
-            row = cur.fetchone()
-            if row:
-                empenho_id = row[0]
-                for doc in docs:
-                    cur.execute("""
-                        INSERT INTO portal_estado_ms.ne_documentos
-                            (empenho_id, num_ne, documento, descricao, tipo, data, valor)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """, (
-                        empenho_id,
-                        num_ne,
-                        doc.get("documento"),
-                        doc.get("descricaoDocumento"),
-                        doc.get("tipo"),
-                        doc.get("data"),
-                        doc.get("valor"),
-                    ))
-                conn.commit()
+        if row and docs:
+            empenho_id = row[1]
+            for doc in docs:
+                cur.execute("""
+                    INSERT INTO portal_estado_ms.ne_documentos
+                        (empenho_id, num_ne, documento, descricao, tipo, data, valor)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (num_ne, tipo, documento)
+                    WHERE documento IS NOT NULL DO NOTHING
+                """, (
+                    empenho_id,
+                    num_ne,
+                    doc.get("documento"),
+                    doc.get("descricaoDocumento"),
+                    doc.get("tipo"),
+                    doc.get("data"),
+                    doc.get("valor"),
+                ))
+            conn.commit()
 
-    return inserted
+    return 1 if is_new else 0
 
 
 def log_inicio(conn, exercicio: str, mes: str) -> int:
@@ -228,21 +230,16 @@ def paginar(endpoint: str, params: dict) -> list:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# SCRAPE DE UM PERIODO
+# SCRAPE DE UM EXERCICIO (range do ano inteiro em todas as chamadas)
 # ═══════════════════════════════════════════════════════════════════
-def scrape_periodo(conn, exercicio: str, mes: str,
-                   credor_hash: str, conf: dict):
-    ano = int(exercicio)
-    mes_n = int(mes)
-    _, ultimo_dia = monthrange(ano, mes_n)
-    data_inicio = f"{exercicio}-{mes_n:02d}-01"
-    data_fim    = f"{exercicio}-{mes_n:02d}-{ultimo_dia:02d}"
+def scrape_exercicio(conn, exercicio: str, credor_hash: str, conf: dict):
+    data_inicio = f"{exercicio}-01-01"
+    data_fim    = f"{exercicio}-12-31"
     pagesize    = int(conf.get("pagesize", "100"))
     t_sleep     = float(conf.get("t_sleep", "1.0"))
 
-    print(f"\n[PERIODO] {exercicio}/{mes} | {data_inicio} -> {data_fim}")
-    log_id = log_inicio(conn, exercicio, mes)
-    nes_existentes = carregar_nes_existentes(conn)
+    print(f"\n[EXERCICIO] {exercicio} | {data_inicio} -> {data_fim}")
+    log_id = log_inicio(conn, exercicio, None)
     novos = 0
 
     try:
@@ -256,8 +253,8 @@ def scrape_periodo(conn, exercicio: str, mes: str,
         })
 
         if not elementos:
-            print("  [INFO] Sem despesas no periodo")
-            log_fim(conn, log_id, "sucesso", 0, "Sem dados no periodo")
+            print("  [INFO] Sem despesas no exercicio")
+            log_fim(conn, log_id, "sucesso", 0, "Sem dados no exercicio")
             return
 
         print(f"  [INFO] {len(elementos)} elemento(s) de despesa")
@@ -269,12 +266,12 @@ def scrape_periodo(conn, exercicio: str, mes: str,
             tipo_lic  = elem.get("tipoLicitacao") or ""
 
             nes = paginar("detalhedespesaorgaoscredores", {
-                "anoconsulta":     exercicio,
-                "dataInicio":      data_inicio,
-                "dataFim":         data_fim,
-                "credor":          credor_hash,
+                "anoconsulta":       exercicio,
+                "dataInicio":        data_inicio,
+                "dataFim":           data_fim,
+                "credor":            credor_hash,
                 "elementoDespesaId": elem_id,
-                "pagesize":        pagesize,
+                "pagesize":          pagesize,
             })
 
             for ne_item in nes:
@@ -282,8 +279,6 @@ def scrape_periodo(conn, exercicio: str, mes: str,
                 ug_codigo = str(ne_item.get("unidadeGestoraCodigo") or "")
 
                 if not num_ne:
-                    continue
-                if (num_ne, ug_codigo) in nes_existentes:
                     continue
 
                 # ── Passo 3: detalhe completo do NE ─────────────────
@@ -305,6 +300,10 @@ def scrape_periodo(conn, exercicio: str, mes: str,
                 ne_full = detalhe["data"][0]
                 docs    = ne_full.get("lista", [])
 
+                # Extrai mes do dataEmpenho (formato DD/MM/YYYY)
+                data_empenho = ne_full.get("dataEmpenho") or ""
+                mes = data_empenho[3:5] if len(data_empenho) >= 5 else None
+
                 cnt = inserir_empenho(
                     conn, exercicio, mes, ne_full,
                     ug_codigo, docs,
@@ -312,11 +311,10 @@ def scrape_periodo(conn, exercicio: str, mes: str,
                 )
                 if cnt:
                     novos += 1
-                    nes_existentes.add((num_ne, ug_codigo))
-                    print(f"  [+] {num_ne} | {(ne_full.get('unidadeGestoraNome') or '').strip()}")
+                print(f"  {'[+]' if cnt else '[~]'} {num_ne} | {(ne_full.get('unidadeGestoraNome') or '').strip()}")
 
         log_fim(conn, log_id, "sucesso", novos)
-        print(f"  [OK] {novos} empenho(s) novo(s)")
+        print(f"  [OK] {novos} novo(s), demais atualizados")
 
     except Exception as exc:
         msg = str(exc)
@@ -337,8 +335,6 @@ def main():
     conf = carregar_conf(conn)
 
     exercicios  = [e.strip() for e in conf.get("exercicios", "2026").split(",")]
-    mes_inicio  = int(conf.get("mes_inicio", "1"))
-    mes_fim     = int(conf.get("mes_fim", "12"))
     credor_nome = conf.get("credor_nome", "IIN TECNOLOGIAS")
 
     for exercicio in exercicios:
@@ -346,12 +342,7 @@ def main():
         if not credor_hash:
             print(f"[AVISO] Credor nao encontrado para {exercicio}, pulando")
             continue
-
-        for mes_n in range(mes_inicio, mes_fim + 1):
-            # Nao scrape meses futuros
-            if date(int(exercicio), mes_n, 1) > date.today():
-                break
-            scrape_periodo(conn, exercicio, f"{mes_n:02d}", credor_hash, conf)
+        scrape_exercicio(conn, exercicio, credor_hash, conf)
 
     conn.close()
     print("\n[FIM] Scraper concluido")
