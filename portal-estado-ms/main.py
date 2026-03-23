@@ -145,22 +145,20 @@ def inserir_empenho(conn, exercicio: str, mes: str, ne: dict,
         })
         conn.commit()
         # xmax=0 significa insert; xmax>0 significa update
-        cur.execute("SELECT xmax, id FROM portal_estado_ms.empenhos WHERE num_ne = %s AND ug_codigo = %s",
+        cur.execute("SELECT xmax FROM portal_estado_ms.empenhos WHERE num_ne = %s AND ug_codigo = %s",
                     (num_ne, ug_codigo))
         row = cur.fetchone()
         is_new = row and int(row[0]) == 0
 
         if row and docs:
-            empenho_id = row[1]
             for doc in docs:
                 cur.execute("""
                     INSERT INTO portal_estado_ms.ne_documentos
-                        (empenho_id, num_ne, documento, descricao, tipo, data, valor)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        (num_ne, documento, descricao, tipo, data, valor)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (num_ne, tipo, documento)
                     WHERE documento IS NOT NULL DO NOTHING
                 """, (
-                    empenho_id,
                     num_ne,
                     doc.get("documento"),
                     doc.get("descricaoDocumento"),

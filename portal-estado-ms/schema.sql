@@ -63,9 +63,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS empenhos_ne_ug_idx
 -- Documentos do empenho (EMPENHO, VLR. LIQ., VLR. PAGO)
 -- ----------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS portal_estado_ms.ne_documentos (
-    id          SERIAL PRIMARY KEY,
-    empenho_id  INTEGER REFERENCES portal_estado_ms.empenhos(id),
-    num_ne      TEXT,
+    id      SERIAL PRIMARY KEY,
+    num_ne  TEXT,
     documento   TEXT,
     descricao   TEXT,
     tipo        TEXT,
