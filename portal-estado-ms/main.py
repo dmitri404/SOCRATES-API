@@ -86,6 +86,12 @@ def carregar_conf(conn) -> dict:
         return {r[0]: r[1] for r in cur.fetchall()}
 
 
+def carregar_conf_cpfs(conn) -> list:
+    with conn.cursor() as cur:
+        cur.execute("SELECT cpf, nome FROM portal_estado_ms.conf_cpfs WHERE ativo = true")
+        return [{"cpf": r[0], "nome": r[1]} for r in cur.fetchall()]
+
+
 def carregar_nes_existentes(conn) -> set:
     with conn.cursor() as cur:
         cur.execute("""
@@ -325,15 +331,23 @@ def main():
     conn = _conectar()
     conf = carregar_conf(conn)
 
-    exercicios  = [e.strip() for e in conf.get("exercicios", "2026").split(",")]
-    credor_nome = conf.get("credor_nome", "IIN TECNOLOGIAS")
+    exercicios = [e.strip() for e in conf.get("exercicios", "2026").split(",")]
+    credores   = carregar_conf_cpfs(conn)
 
-    for exercicio in exercicios:
-        credor_hash = buscar_credor_hash(exercicio, credor_nome)
-        if not credor_hash:
-            print(f"[AVISO] Credor nao encontrado para {exercicio}, pulando")
-            continue
-        scrape_exercicio(conn, exercicio, credor_hash, conf)
+    if not credores:
+        print("[AVISO] Nenhum credor ativo em conf_cpfs, encerrando")
+        conn.close()
+        return
+
+    for credor in credores:
+        credor_nome = credor["nome"]
+        print(f"\n[CREDOR] {credor_nome}")
+        for exercicio in exercicios:
+            credor_hash = buscar_credor_hash(exercicio, credor_nome)
+            if not credor_hash:
+                print(f"[AVISO] Credor nao encontrado para {exercicio}, pulando")
+                continue
+            scrape_exercicio(conn, exercicio, credor_hash, conf)
 
     conn.close()
     print("\n[FIM] Scraper concluido")

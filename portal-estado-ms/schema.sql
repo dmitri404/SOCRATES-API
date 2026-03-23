@@ -18,12 +18,10 @@ CREATE TABLE IF NOT EXISTS portal_estado_ms.conf (
 );
 
 INSERT INTO portal_estado_ms.conf (chave, valor, descricao) VALUES
-    ('credor_nome',  'IIN TECNOLOGIAS',  'Texto parcial do credor para busca na API'),
-    ('exercicios',   '2026',             'Exercicios separados por virgula'),
-    ('mes_inicio',   '1',                'Mes inicial (inteiro)'),
-    ('mes_fim',      '12',               'Mes final (inteiro)'),
-    ('pagesize',     '100',              'Tamanho de pagina nas requisicoes'),
-    ('t_sleep',      '1.0',              'Pausa entre requisicoes em segundos')
+    ('mes_inicio',   '1',    'Mes inicial (inteiro)'),
+    ('mes_fim',      '12',   'Mes final (inteiro)'),
+    ('pagesize',     '100',  'Tamanho de pagina nas requisicoes'),
+    ('t_sleep',      '1.0',  'Pausa entre requisicoes em segundos')
 ON CONFLICT (chave) DO NOTHING;
 
 -- ----------------------------------------------------------------
