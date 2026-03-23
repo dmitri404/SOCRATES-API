@@ -97,24 +97,23 @@ def carregar_nes_existentes(conn) -> set:
 
 def inserir_empenho(conn, exercicio: str, mes: str, ne: dict,
                     ug_codigo: str, docs: list,
-                    elem_nome: str, elem_id: str,
-                    tipo_licitacao: str, credor_hash: str) -> int:
+                    elem_id: str) -> int:
     num_ne = ne.get("numeroEmpenho")
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO portal_estado_ms.empenhos
                 (exercicio, mes, num_ne, data_empenho, num_processo,
-                 ug_nome, ug_codigo, credor_nome, credor_hash,
-                 projeto_atividade, programa, sub_funcao, funcao,
+                 ug_nome, ug_codigo, credor_nome,
+                 projeto_atividade, programa, funcao,
                  fonte_recursos, natureza_despesa,
-                 elemento_despesa, elemento_despesa_id, tipo_licitacao,
+                 elemento_despesa_id,
                  empenhado, liquidado, pago)
             VALUES
                 (%(exercicio)s, %(mes)s, %(num_ne)s, %(data_empenho)s, %(num_processo)s,
-                 %(ug_nome)s, %(ug_codigo)s, %(credor_nome)s, %(credor_hash)s,
-                 %(projeto_atividade)s, %(programa)s, %(sub_funcao)s, %(funcao)s,
+                 %(ug_nome)s, %(ug_codigo)s, %(credor_nome)s,
+                 %(projeto_atividade)s, %(programa)s, %(funcao)s,
                  %(fonte_recursos)s, %(natureza_despesa)s,
-                 %(elemento_despesa)s, %(elemento_despesa_id)s, %(tipo_licitacao)s,
+                 %(elemento_despesa_id)s,
                  %(empenhado)s, %(liquidado)s, %(pago)s)
             ON CONFLICT (num_ne, ug_codigo) WHERE num_ne IS NOT NULL AND ug_codigo IS NOT NULL
             DO UPDATE SET empenhado = EXCLUDED.empenhado,
@@ -129,16 +128,12 @@ def inserir_empenho(conn, exercicio: str, mes: str, ne: dict,
             "ug_nome":            ne.get("unidadeGestoraNome"),
             "ug_codigo":          ug_codigo,
             "credor_nome":        ne.get("credorNome"),
-            "credor_hash":        credor_hash,
             "projeto_atividade":  (ne.get("projetoAtividadeDescricao") or "").strip(),
             "programa":           ne.get("programaDescricao"),
-            "sub_funcao":         (ne.get("subFuncaoNome") or "").strip(),
             "funcao":             (ne.get("funcaoNome") or "").strip(),
             "fonte_recursos":     (ne.get("fonteRecursos") or "").strip(),
             "natureza_despesa":   ne.get("naturezaDespesa"),
-            "elemento_despesa":   elem_nome,
             "elemento_despesa_id": elem_id,
-            "tipo_licitacao":     tipo_licitacao,
             "empenhado":          ne.get("totalEmpenhado"),
             "liquidado":          ne.get("totalLiquidado"),
             "pago":               ne.get("totalPago"),
@@ -260,8 +255,6 @@ def scrape_exercicio(conn, exercicio: str, credor_hash: str, conf: dict):
         # ── Passo 2: NEs por elemento ────────────────────────────────
         for elem in elementos:
             elem_id   = str(elem.get("elementoDespesaId", ""))
-            elem_nome = (elem.get("elementoDespesa") or "").strip()
-            tipo_lic  = elem.get("tipoLicitacao") or ""
 
             nes = paginar("detalhedespesaorgaoscredores", {
                 "anoconsulta":       exercicio,
@@ -305,7 +298,7 @@ def scrape_exercicio(conn, exercicio: str, credor_hash: str, conf: dict):
                 cnt = inserir_empenho(
                     conn, exercicio, mes, ne_full,
                     ug_codigo, docs,
-                    elem_nome, elem_id, tipo_lic, credor_hash,
+                    elem_id,
                 )
                 if cnt:
                     novos += 1
