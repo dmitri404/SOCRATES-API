@@ -30,7 +30,7 @@ import psycopg2.extras
 TOKEN_URL     = "https://id.ms.gov.br/auth/realms/ms/protocol/openid-connect/token"
 CLIENT_ID     = "ptransparencia.app"
 CLIENT_SECRET = "95064d80-afd5-4e6b-8cb5-4385db664f5a"
-BASE_URL      = "https://gw.sgi.ms.gov.br/d0146/transpdespesas/v1"
+BASE_URL      = None  # carregado de portal_estado_ms.conf.url_base
 TOKEN_TTL     = 240  # renovar a cada 4 min (token expira em 5)
 
 # ═══════════════════════════════════════════════════════════════════
@@ -82,8 +82,17 @@ def _conectar():
 
 def carregar_conf(conn) -> dict:
     with conn.cursor() as cur:
-        cur.execute("SELECT chave, valor FROM portal_estado_ms.conf")
-        return {r[0]: r[1] for r in cur.fetchall()}
+        cur.execute("SELECT url_base, modo_limpar FROM portal_estado_ms.conf LIMIT 1")
+        row = cur.fetchone()
+        if not row:
+            raise RuntimeError("Tabela conf vazia — insira uma linha com url_base")
+        return {"url_base": row[0], "modo_limpar": row[1]}
+
+
+def _carregar_exercicios(conn) -> list:
+    with conn.cursor() as cur:
+        cur.execute("SELECT exercicio FROM portal_estado_ms.conf_exercicios WHERE ativo = true ORDER BY exercicio")
+        return cur.fetchall()
 
 
 def carregar_conf_cpfs(conn) -> list:
@@ -331,7 +340,11 @@ def main():
     conn = _conectar()
     conf = carregar_conf(conn)
 
-    exercicios = [e.strip() for e in conf.get("exercicios", "2026").split(",")]
+    global BASE_URL
+    BASE_URL = conf["url_base"]
+    print(f"[CONF] url_base={BASE_URL}")
+
+    exercicios = [r[0] for r in _carregar_exercicios(conn)]
     credores   = carregar_conf_cpfs(conn)
 
     if not credores:
