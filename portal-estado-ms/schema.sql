@@ -102,12 +102,13 @@ ON CONFLICT (exercicio) DO NOTHING;
 -- Log de execucoes
 -- ----------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS portal_estado_ms.execucao_logs (
-    id             SERIAL PRIMARY KEY,
-    iniciado_em    TIMESTAMPTZ DEFAULT NOW(),
-    finalizado_em  TIMESTAMPTZ,
-    status         TEXT,           -- 'executando', 'sucesso', 'erro'
-    exercicio      TEXT,
-    mes            TEXT,
-    empenhos_novos INTEGER DEFAULT 0,
-    mensagem       TEXT
+    id              SERIAL PRIMARY KEY,
+    iniciado_em     TIMESTAMPTZ DEFAULT NOW(),
+    finalizado_em   TIMESTAMPTZ,
+    status          TEXT,           -- 'executando', 'sucesso', 'erro'
+    exercicio       TEXT,
+    mes             TEXT,
+    empenhos_novos  INTEGER DEFAULT 0,
+    documentos_novos INTEGER DEFAULT 0,
+    mensagem        TEXT
 );

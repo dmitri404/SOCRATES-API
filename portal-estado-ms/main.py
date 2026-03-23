@@ -191,13 +191,14 @@ def log_inicio(conn, exercicio: str, mes: str) -> int:
         return cur.fetchone()[0]
 
 
-def log_fim(conn, log_id: int, status: str, empenhos_novos: int, mensagem: str = ""):
+def log_fim(conn, log_id: int, status: str, empenhos_novos: int, documentos_novos: int = 0, mensagem: str = ""):
     with conn.cursor() as cur:
         cur.execute("""
             UPDATE portal_estado_ms.execucao_logs
-            SET finalizado_em = NOW(), status = %s, empenhos_novos = %s, mensagem = %s
+            SET finalizado_em = NOW(), status = %s,
+                empenhos_novos = %s, documentos_novos = %s, mensagem = %s
             WHERE id = %s
-        """, (status, empenhos_novos, mensagem, log_id))
+        """, (status, empenhos_novos, documentos_novos, mensagem, log_id))
         conn.commit()
 
 
@@ -249,6 +250,7 @@ def scrape_exercicio(conn, exercicio: str, credor_hash: str, conf: dict):
     print(f"\n[EXERCICIO] {exercicio} | {data_inicio} -> {data_fim}")
     log_id = log_inicio(conn, exercicio, None)
     novos = 0
+    docs_novos = 0
 
     try:
         # ── Passo 1: elementos de despesa do credor ─────────────────
@@ -262,7 +264,7 @@ def scrape_exercicio(conn, exercicio: str, credor_hash: str, conf: dict):
 
         if not elementos:
             print("  [INFO] Sem despesas no exercicio")
-            log_fim(conn, log_id, "sucesso", 0, "Sem dados no exercicio")
+            log_fim(conn, log_id, "sucesso", 0, 0, "Sem dados no exercicio")
             return
 
         print(f"  [INFO] {len(elementos)} elemento(s) de despesa")
@@ -317,14 +319,15 @@ def scrape_exercicio(conn, exercicio: str, credor_hash: str, conf: dict):
                 )
                 if cnt:
                     novos += 1
+                    docs_novos += len(docs)
                 print(f"  {'[+]' if cnt else '[~]'} {num_ne} | {(ne_full.get('unidadeGestoraNome') or '').strip()}")
 
-        log_fim(conn, log_id, "sucesso", novos)
-        print(f"  [OK] {novos} novo(s), demais atualizados")
+        log_fim(conn, log_id, "sucesso", novos, docs_novos)
+        print(f"  [OK] {novos} novo(s), {docs_novos} documento(s) novos")
 
     except Exception as exc:
         msg = str(exc)
-        log_fim(conn, log_id, "erro", novos, msg)
+        log_fim(conn, log_id, "erro", novos, docs_novos, msg)
         print(f"  [ERRO] {msg}")
         raise
 
