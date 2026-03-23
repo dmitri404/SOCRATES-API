@@ -20,6 +20,12 @@ from datetime import date
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True)
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True)
 
+import json
+import smtplib
+from datetime import datetime
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
 import requests
 import psycopg2
 import psycopg2.extras
@@ -87,6 +93,12 @@ def carregar_conf(conn) -> dict:
         if not row:
             raise RuntimeError("Tabela conf vazia — insira uma linha com url_base")
         return {"url_base": row[0], "modo_limpar": row[1]}
+
+
+def carregar_conf_emails(conn) -> list:
+    with conn.cursor() as cur:
+        cur.execute("SELECT email FROM portal_estado_ms.conf_emails WHERE ativo = true ORDER BY id")
+        return [r[0] for r in cur.fetchall()]
 
 
 def _carregar_exercicios(conn) -> list:
@@ -333,6 +345,45 @@ def scrape_exercicio(conn, exercicio: str, credor_hash: str, conf: dict):
 
 
 # ═══════════════════════════════════════════════════════════════════
+# EMAIL
+# ═══════════════════════════════════════════════════════════════════
+def enviar_email(destinatarios: list, fim: datetime):
+    if not destinatarios:
+        print("[EMAIL] Nenhum destinatario em conf_emails, e-mail nao enviado")
+        return
+
+    remetente = "eliotsafadao@gmail.com"
+    try:
+        with open("credentials.json", "r") as f:
+            creds = json.load(f)
+        senha = creds.get("gmail_app_password", "")
+    except Exception as e:
+        print(f"[EMAIL] Nao foi possivel ler credentials.json: {e}")
+        return
+
+    if not senha:
+        print("[EMAIL] gmail_app_password ausente em credentials.json")
+        return
+
+    assunto = f"[Portal Estado MS] Execucao concluida - {fim.strftime('%d/%m/%Y %H:%M')}"
+
+    try:
+        msg = MIMEMultipart()
+        msg["From"]    = remetente
+        msg["To"]      = ", ".join(destinatarios)
+        msg["Subject"] = assunto
+        msg.attach(MIMEText(assunto, "plain", "utf-8"))
+
+        print(f"[EMAIL] Enviando para {destinatarios}")
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(remetente, senha)
+            smtp.sendmail(remetente, destinatarios, msg.as_string())
+        print("[EMAIL] E-mail enviado com sucesso!")
+    except Exception as e:
+        print(f"[EMAIL] Erro ao enviar: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════════
 # MAIN
 # ═══════════════════════════════════════════════════════════════════
 def main():
@@ -350,6 +401,8 @@ def main():
     exercicios = [r[0] for r in _carregar_exercicios(conn)]
     credores   = carregar_conf_cpfs(conn)
 
+    emails = carregar_conf_emails(conn)
+
     if not credores:
         print("[AVISO] Nenhum credor ativo em conf_cpfs, encerrando")
         conn.close()
@@ -366,6 +419,8 @@ def main():
             scrape_exercicio(conn, exercicio, credor_hash, conf)
 
     conn.close()
+    fim = datetime.now()
+    enviar_email(emails, fim)
     print("\n[FIM] Scraper concluido")
 
 

@@ -62,6 +62,7 @@ services:
     container_name: portal-estado-ms
     restart: no
     volumes:
+      - ./novo7/credentials.json:/app/credentials.json:ro
       - ./logs:/app/logs
     environment:
       - TZ=America/Campo_Grande
