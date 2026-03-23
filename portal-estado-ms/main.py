@@ -117,7 +117,7 @@ def inserir_empenho(conn, exercicio: str, mes: str, ne: dict,
                  %(fonte_recursos)s, %(natureza_despesa)s,
                  %(elemento_despesa)s, %(elemento_despesa_id)s, %(tipo_licitacao)s,
                  %(empenhado)s, %(liquidado)s, %(pago)s)
-            ON CONFLICT (num_ne, ug_codigo) DO NOTHING
+            ON CONFLICT (num_ne, ug_codigo) WHERE num_ne IS NOT NULL AND ug_codigo IS NOT NULL DO NOTHING
         """, {
             "exercicio":          exercicio,
             "mes":                mes,
