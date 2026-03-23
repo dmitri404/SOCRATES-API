@@ -73,6 +73,41 @@ CREATE INDEX IF NOT EXISTS ne_documentos_num_ne_idx
     ON portal_estado_ms.ne_documentos (num_ne);
 
 -- ----------------------------------------------------------------
+-- CPFs/CNPJs monitorados
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS portal_estado_ms.conf_cpfs (
+    id         SERIAL PRIMARY KEY,
+    cpf        TEXT NOT NULL UNIQUE,
+    nome       TEXT,
+    ativo      BOOLEAN NOT NULL DEFAULT true,
+    criado_em  TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ----------------------------------------------------------------
+-- E-mails para notificacao
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS portal_estado_ms.conf_emails (
+    id         SERIAL PRIMARY KEY,
+    email      TEXT NOT NULL UNIQUE,
+    nome       TEXT,
+    ativo      BOOLEAN NOT NULL DEFAULT true,
+    criado_em  TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ----------------------------------------------------------------
+-- Exercicios monitorados
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS portal_estado_ms.conf_exercicios (
+    id         SERIAL PRIMARY KEY,
+    exercicio  TEXT NOT NULL UNIQUE,
+    ativo      BOOLEAN NOT NULL DEFAULT true,
+    criado_em  TIMESTAMPTZ DEFAULT NOW()
+);
+
+INSERT INTO portal_estado_ms.conf_exercicios (exercicio) VALUES ('2026')
+ON CONFLICT (exercicio) DO NOTHING;
+
+-- ----------------------------------------------------------------
 -- Log de execucoes
 -- ----------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS portal_estado_ms.execucao_logs (
