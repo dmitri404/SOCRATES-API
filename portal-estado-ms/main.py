@@ -277,7 +277,7 @@ def scrape_exercicio(conn, exercicio: str, credor_hash: str, conf: dict):
         if not elementos:
             print("  [INFO] Sem despesas no exercicio")
             log_fim(conn, log_id, "sucesso", 0, 0, "Sem dados no exercicio")
-            return
+            return 0, 0
 
         print(f"  [INFO] {len(elementos)} elemento(s) de despesa")
 
@@ -336,6 +336,7 @@ def scrape_exercicio(conn, exercicio: str, credor_hash: str, conf: dict):
 
         log_fim(conn, log_id, "sucesso", novos, docs_novos)
         print(f"  [OK] {novos} novo(s), {docs_novos} documento(s) novos")
+        return novos, docs_novos
 
     except Exception as exc:
         msg = str(exc)
@@ -347,7 +348,8 @@ def scrape_exercicio(conn, exercicio: str, credor_hash: str, conf: dict):
 # ═══════════════════════════════════════════════════════════════════
 # EMAIL
 # ═══════════════════════════════════════════════════════════════════
-def enviar_email(destinatarios: list, fim: datetime):
+def enviar_email(destinatarios: list, inicio: datetime, fim: datetime,
+                 empenhos_novos: int, documentos_novos: int, credores: list):
     if not destinatarios:
         print("[EMAIL] Nenhum destinatario em conf_emails, e-mail nao enviado")
         return
@@ -366,13 +368,27 @@ def enviar_email(destinatarios: list, fim: datetime):
         return
 
     assunto = f"[Portal Estado MS] Execucao concluida - {fim.strftime('%d/%m/%Y %H:%M')}"
+    duracao = fim - inicio
+    nomes_credores = ", ".join(c["nome"] for c in credores)
+
+    corpo = (
+        "Resumo da Execucao - Scraper Portal da Transparencia MS\n"
+        "======================================================\n\n"
+        f"Inicio  : {inicio.strftime('%d/%m/%Y %H:%M:%S')}\n"
+        f"Fim     : {fim.strftime('%d/%m/%Y %H:%M:%S')}\n"
+        f"Duracao : {duracao}\n\n"
+        f"Documentos novos : {documentos_novos}\n"
+        f"Empenhos novos   : {empenhos_novos}\n\n"
+        f"Credores: {nomes_credores}\n\n"
+        "Mensagem automatica gerada pelo scraper."
+    )
 
     try:
         msg = MIMEMultipart()
         msg["From"]    = remetente
         msg["To"]      = ", ".join(destinatarios)
         msg["Subject"] = assunto
-        msg.attach(MIMEText(assunto, "plain", "utf-8"))
+        msg.attach(MIMEText(corpo, "plain", "utf-8"))
 
         print(f"[EMAIL] Enviando para {destinatarios}")
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
@@ -402,6 +418,9 @@ def main():
     credores   = carregar_conf_cpfs(conn)
 
     emails = carregar_conf_emails(conn)
+    inicio = datetime.now()
+    total_empenhos = 0
+    total_docs = 0
 
     if not credores:
         print("[AVISO] Nenhum credor ativo em conf_cpfs, encerrando")
@@ -416,11 +435,13 @@ def main():
             if not credor_hash:
                 print(f"[AVISO] Credor nao encontrado para {exercicio}, pulando")
                 continue
-            scrape_exercicio(conn, exercicio, credor_hash, conf)
+            e, d = scrape_exercicio(conn, exercicio, credor_hash, conf)
+            total_empenhos += e
+            total_docs += d
 
     conn.close()
     fim = datetime.now()
-    enviar_email(emails, fim)
+    enviar_email(emails, inicio, fim, total_empenhos, total_docs, credores)
     print("\n[FIM] Scraper concluido")
 
 
