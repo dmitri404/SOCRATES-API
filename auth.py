@@ -5,6 +5,7 @@ API_KEYS = {
     "portal_municipal_manaus": os.getenv("API_KEY_PORTAL_MUNICIPAL_MANAUS"),
     "portal_estado_am":        os.getenv("API_KEY_PORTAL_ESTADO_AM"),
     "portal_estado_ms":        os.getenv("API_KEY_PORTAL_ESTADO_MS"),
+    "portal_estado_ro":        os.getenv("API_KEY_PORTAL_ESTADO_RO"),
 }
 
 def verificar_api_key(app: str, x_api_key: str = Header(...)):

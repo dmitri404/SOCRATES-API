@@ -75,6 +75,24 @@ services:
       - portal_default
       - supabase_default
 
+  portal-estado-ro:
+    build: ./portal-estado-rondonia
+    container_name: portal-estado-ro
+    restart: no
+    volumes:
+      - ./novo7/credentials.json:/app/credentials.json:ro
+      - ./logs:/app/logs
+    environment:
+      - TZ=America/Porto_Velho
+      - SUPABASE_DB_HOST=supabase-db
+      - SUPABASE_DB_PORT=5432
+      - SUPABASE_DB_NAME=postgres
+      - SUPABASE_DB_USER=postgres
+      - SUPABASE_DB_PASSWORD=HKcSH_yTEsQ42cdEvhruQ9kNbrN54U4WfiLKDXD-Tf0
+    networks:
+      - portal_default
+      - supabase_default
+
   portal-estado-am:
     build: ./portal-estado-am
     container_name: portal-estado-am
@@ -108,6 +126,7 @@ services:
       - API_KEY_PORTAL_MUNICIPAL_MANAUS=aris-22386d82643aa6e36b12688a7175698d
       - API_KEY_PORTAL_ESTADO_AM=estam-52394a9ff66f976ee2ab097a6844a7a4
       - API_KEY_PORTAL_ESTADO_MS=estms-7f3c91a2b84d5e6f019c237ab8d4e15f
+      - API_KEY_PORTAL_ESTADO_RO=estro-3b8f72c1d94a6e520f7b183cd5a9e04d
     networks:
       - portal_default
       - supabase_default
