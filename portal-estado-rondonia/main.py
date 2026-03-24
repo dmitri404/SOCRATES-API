@@ -367,7 +367,10 @@ def scrape_exercicio(conn, exercicio: str, credor: dict) -> int:
                 if total == 0:
                     break
 
-            empenhos_raw.extend(data.get("data", []))
+            rows = data.get("data", [])
+            if not rows:
+                break
+            empenhos_raw.extend(rows)
             start += PAGESIZE
             if start >= total:
                 break
