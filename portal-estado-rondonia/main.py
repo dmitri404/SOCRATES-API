@@ -11,12 +11,14 @@ Fluxo por exercicio:
 import sys
 import io
 import os
+import re
 import json
 import smtplib
 import time
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from html import unescape
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True)
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True)
@@ -34,8 +36,29 @@ T_SLEEP    = 0.5
 
 SESSION_URL   = "https://transparencia.ro.gov.br/Despesa/notas-de-empenho"
 FILTRAR_PATH  = "/Despesa/FiltrarEmpenhos"
+DETALHES_PATH = "/Despesa/notas-de-empenho/detalhes"
 
 _session = None
+
+_LABEL_MAP = {
+    "Histórico":                                                        "historico",
+    "Modalidade licitatória":                                           "modalidade_licitacao",
+    "Secretaria":                                                       "secretaria",
+    "Tipo de empenho":                                                  "tipo_empenho",
+    "Efeito":                                                           "efeito",
+    "Função":                                                           "funcao",
+    "Subfunção":                                                        "subfuncao",
+    "Programa de governo":                                              "programa_governo",
+    "Ação de governo":                                                  "acao_governo",
+    "Fonte do recurso":                                                 "fonte_recurso",
+    "Item de despesa":                                                  "item_despesa",
+    "Projeto":                                                          "projeto",
+    "Valor empenhado final":                                            "valor_empenhado_final",
+    "Valor pago no exercício do empenho":                               "valor_pago_exercicio",
+    "Valor pago em anos posteriores ao da emissão do empenho":          "valor_pago_anos_posteriores",
+    "Valor liquidado no exercício da emissão do empenho":               "valor_liquidado_exercicio",
+    "Valor liquidado em anos posteriores ao da emissão do empenho":     "valor_liquidado_anos_posteriores",
+}
 
 
 def _get_session() -> requests.Session:
@@ -98,18 +121,20 @@ def carregar_exercicios(conn) -> list:
         return [r[0] for r in cur.fetchall()]
 
 
-def inserir_empenho(conn, exercicio: str, row: dict) -> int:
+def inserir_empenho(conn, exercicio: str, row: dict, portal_id: int = None) -> tuple:
+    """Retorna (is_new, db_id)."""
     num_ne = row.get("numeroEmpenho")
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO portal_estado_ro.empenhos
                 (exercicio, num_ne, data_empenho, unidade_gestora, credor,
-                 valor_empenhado, valor_pago)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                 valor_empenhado, valor_pago, portal_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (num_ne, exercicio)
             WHERE num_ne IS NOT NULL AND exercicio IS NOT NULL
             DO UPDATE SET valor_empenhado = EXCLUDED.valor_empenhado,
-                          valor_pago      = EXCLUDED.valor_pago
+                          valor_pago      = EXCLUDED.valor_pago,
+                          portal_id       = EXCLUDED.portal_id
         """, (
             exercicio,
             num_ne,
@@ -118,14 +143,17 @@ def inserir_empenho(conn, exercicio: str, row: dict) -> int:
             row.get("credor"),
             _parse_valor(row.get("valorEmpenhado")),
             _parse_valor(row.get("valorPago")),
+            portal_id,
         ))
         conn.commit()
         cur.execute("""
-            SELECT xmax FROM portal_estado_ro.empenhos
+            SELECT xmax, id FROM portal_estado_ro.empenhos
             WHERE num_ne = %s AND exercicio = %s
         """, (num_ne, exercicio))
         row_db = cur.fetchone()
-        return 1 if (row_db and int(row_db[0]) == 0) else 0
+        is_new = 1 if (row_db and int(row_db[0]) == 0) else 0
+        db_id  = row_db[1] if row_db else None
+        return is_new, db_id
 
 
 def log_inicio(conn, exercicio: str) -> int:
@@ -146,6 +174,84 @@ def log_fim(conn, log_id: int, status: str, empenhos_novos: int, mensagem: str =
                 empenhos_novos = %s, mensagem = %s
             WHERE id = %s
         """, (status, empenhos_novos, mensagem, log_id))
+        conn.commit()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# DETALHES
+# ═══════════════════════════════════════════════════════════════════
+def _extract_portal_id(link: str) -> int | None:
+    m = re.search(r"\?id=(\d+)", link or "")
+    val = int(m.group(1)) if m else None
+    return val if val and val > 0 else None
+
+
+def _buscar_detalhes(portal_id: int) -> dict | None:
+    url = f"{BASE_URL}{DETALHES_PATH}?id={portal_id}"
+    try:
+        resp = _get_session().get(url, timeout=30)
+        resp.raise_for_status()
+        pairs = re.findall(
+            r'<p\s+class="content-label">(.*?)</p>\s*<p\s+class="content-value">\s*(?:<em>)?(.*?)(?:</em>)?\s*</p>',
+            resp.text, re.DOTALL,
+        )
+        result = {}
+        for label, value in pairs:
+            col = _LABEL_MAP.get(unescape(label.strip()))
+            if col:
+                result[col] = unescape(re.sub(r"\s+", " ", value.strip())) or None
+        return result if result else None
+    except Exception as exc:
+        print(f"  [DETALHE] Erro id={portal_id}: {exc}")
+        return None
+
+
+def inserir_detalhe(conn, empenho_id: int, portal_id: int, det: dict) -> None:
+    val_cols = [
+        "valor_empenhado_final", "valor_pago_exercicio",
+        "valor_pago_anos_posteriores", "valor_liquidado_exercicio",
+        "valor_liquidado_anos_posteriores",
+    ]
+    for col in val_cols:
+        if det.get(col) is not None:
+            det[col] = _parse_valor(det[col])
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO portal_estado_ro.empenhos_detalhes
+                (empenho_id, portal_id, historico, modalidade_licitacao, secretaria,
+                 tipo_empenho, efeito, funcao, subfuncao, programa_governo, acao_governo,
+                 fonte_recurso, item_despesa, projeto,
+                 valor_empenhado_final, valor_pago_exercicio, valor_pago_anos_posteriores,
+                 valor_liquidado_exercicio, valor_liquidado_anos_posteriores)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (empenho_id) DO UPDATE SET
+                historico             = EXCLUDED.historico,
+                modalidade_licitacao  = EXCLUDED.modalidade_licitacao,
+                secretaria            = EXCLUDED.secretaria,
+                tipo_empenho          = EXCLUDED.tipo_empenho,
+                efeito                = EXCLUDED.efeito,
+                funcao                = EXCLUDED.funcao,
+                subfuncao             = EXCLUDED.subfuncao,
+                programa_governo      = EXCLUDED.programa_governo,
+                acao_governo          = EXCLUDED.acao_governo,
+                fonte_recurso         = EXCLUDED.fonte_recurso,
+                item_despesa          = EXCLUDED.item_despesa,
+                projeto               = EXCLUDED.projeto,
+                valor_empenhado_final            = EXCLUDED.valor_empenhado_final,
+                valor_pago_exercicio             = EXCLUDED.valor_pago_exercicio,
+                valor_pago_anos_posteriores      = EXCLUDED.valor_pago_anos_posteriores,
+                valor_liquidado_exercicio        = EXCLUDED.valor_liquidado_exercicio,
+                valor_liquidado_anos_posteriores = EXCLUDED.valor_liquidado_anos_posteriores
+        """, (
+            empenho_id, portal_id,
+            det.get("historico"), det.get("modalidade_licitacao"), det.get("secretaria"),
+            det.get("tipo_empenho"), det.get("efeito"), det.get("funcao"),
+            det.get("subfuncao"), det.get("programa_governo"), det.get("acao_governo"),
+            det.get("fonte_recurso"), det.get("item_despesa"), det.get("projeto"),
+            det.get("valor_empenhado_final"), det.get("valor_pago_exercicio"),
+            det.get("valor_pago_anos_posteriores"), det.get("valor_liquidado_exercicio"),
+            det.get("valor_liquidado_anos_posteriores"),
+        ))
         conn.commit()
 
 
@@ -173,21 +279,25 @@ def _dt_params(start: int) -> dict:
     }
 
 
-def scrape_exercicio(conn, exercicio: str, credor_nome: str) -> int:
-    print(f"\n[EXERCICIO] {exercicio} | credor={credor_nome}")
+def scrape_exercicio(conn, exercicio: str, credor: dict) -> int:
+    cpf  = credor["cpf"]
+    nome = credor["nome"]
+    print(f"\n[EXERCICIO] {exercicio} | credor={nome}")
     log_id = log_inicio(conn, exercicio)
     novos  = 0
     sess   = _get_session()
     url    = f"{BASE_URL}{FILTRAR_PATH}"
 
     try:
-        start  = 0
-        total  = None
+        start = 0
+        total = None
 
         while True:
             params = _dt_params(start)
-            params["AnoAvancado"]  = exercicio
-            params["NomeCredor"]   = credor_nome
+            params["AnoAvancado"]            = exercicio
+            params["MesInicialAvancado"]     = "1"
+            params["MesFinalAvancado"]       = "12"
+            params["CpfCnpjCredorAvancado"]  = cpf
 
             resp = sess.post(url, data=params, timeout=30)
             resp.raise_for_status()
@@ -200,10 +310,20 @@ def scrape_exercicio(conn, exercicio: str, credor_nome: str) -> int:
                     break
 
             for row in data.get("data", []):
-                cnt = inserir_empenho(conn, exercicio, row)
-                if cnt:
+                portal_id         = _extract_portal_id(row.get("linkDetalhes"))
+                is_new, db_id     = inserir_empenho(conn, exercicio, row, portal_id)
+                if is_new:
                     novos += 1
-                print(f"  {'[+]' if cnt else '[~]'} {row.get('numeroEmpenho')} | {row.get('unidadeGestora')}")
+                label = "[+]" if is_new else "[~]"
+                print(f"  {label} {row.get('numeroEmpenho')} | {row.get('unidadeGestora')}"
+                      + (f" | id={portal_id}" if portal_id else ""))
+
+                if portal_id and db_id:
+                    det = _buscar_detalhes(portal_id)
+                    if det:
+                        inserir_detalhe(conn, db_id, portal_id, det)
+                        print(f"    [DET] salvo")
+                    time.sleep(T_SLEEP)
 
             start += PAGESIZE
             if start >= total:
@@ -304,7 +424,7 @@ def main():
     for credor in credores:
         print(f"\n[CREDOR] {credor['nome']}")
         for exercicio in exercicios:
-            novos = scrape_exercicio(conn, exercicio, credor["nome"])
+            novos = scrape_exercicio(conn, exercicio, credor)
             total_novos += novos
 
     conn.close()
