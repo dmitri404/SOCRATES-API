@@ -376,6 +376,12 @@ def scrape_exercicio(conn, exercicio: str, credor: dict) -> int:
                 break
             time.sleep(T_SLEEP)
 
+        # Filtro client-side: o portal ignora NomeCredor e retorna tudo
+        nome_lower = nome.lower()
+        empenhos_raw = [r for r in empenhos_raw
+                        if nome_lower in r.get("credor", "").lower()]
+        print(f"  [FILTRO] {len(empenhos_raw)} empenho(s) apos filtro client-side")
+
         # Passo 2: buscar portal_ids via pesquisa por mes sem NomeCredor
         ne_meses   = {r["numeroEmpenho"]: r.get("dataDocumento", "") for r in empenhos_raw}
         portal_ids = _buscar_portal_ids(exercicio, ne_meses)
