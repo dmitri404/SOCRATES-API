@@ -279,8 +279,66 @@ def _dt_params(start: int) -> dict:
     }
 
 
+def _buscar_portal_ids(exercicio: str, ne_meses: dict) -> dict:
+    """
+    Busca portal_ids sem filtro de credor, pesquisando mes a mes.
+    ne_meses: {num_ne: "YYYY-MM-DDT00:00:00"}
+    Retorna: {num_ne: portal_id}
+    """
+    if not ne_meses:
+        return {}
+
+    from collections import defaultdict
+    mes_grupos = defaultdict(set)
+    for ne, doc_date in ne_meses.items():
+        try:
+            mes = str(int(doc_date[5:7]))
+        except Exception:
+            mes = "1"
+        mes_grupos[mes].add(ne)
+
+    result = {}
+    sess = _get_session()
+    url  = f"{BASE_URL}{FILTRAR_PATH}"
+
+    for mes, pendentes in mes_grupos.items():
+        pendentes = set(pendentes)
+        start = 0
+        total = None
+        print(f"  [IDS] mes={mes}/{exercicio} | {len(pendentes)} NE(s) a localizar")
+
+        while pendentes:
+            params = _dt_params(start)
+            params["AnoAvancado"]        = exercicio
+            params["MesInicialAvancado"] = mes
+            params["MesFinalAvancado"]   = mes
+
+            resp = sess.post(url, data=params, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+
+            if total is None:
+                total = data.get("recordsFiltered", 0)
+                if total == 0:
+                    break
+
+            for row in data.get("data", []):
+                ne = row.get("numeroEmpenho")
+                if ne in pendentes:
+                    pid = _extract_portal_id(row.get("linkDetalhes"))
+                    if pid:
+                        result[ne] = pid
+                    pendentes.discard(ne)
+
+            start += PAGESIZE
+            if start >= total:
+                break
+            time.sleep(T_SLEEP)
+
+    return result
+
+
 def scrape_exercicio(conn, exercicio: str, credor: dict) -> int:
-    cpf  = credor["cpf"]
     nome = credor["nome"]
     print(f"\n[EXERCICIO] {exercicio} | credor={nome}")
     log_id = log_inicio(conn, exercicio)
@@ -289,15 +347,15 @@ def scrape_exercicio(conn, exercicio: str, credor: dict) -> int:
     url    = f"{BASE_URL}{FILTRAR_PATH}"
 
     try:
+        # Passo 1: coletar empenhos via NomeCredor (filtragem correta)
+        empenhos_raw = []
         start = 0
         total = None
 
         while True:
             params = _dt_params(start)
-            params["AnoAvancado"]            = exercicio
-            params["MesInicialAvancado"]     = "1"
-            params["MesFinalAvancado"]       = "12"
-            params["CpfCnpjCredorAvancado"]  = cpf
+            params["AnoAvancado"] = exercicio
+            params["NomeCredor"]  = nome
 
             resp = sess.post(url, data=params, timeout=30)
             resp.raise_for_status()
@@ -309,27 +367,33 @@ def scrape_exercicio(conn, exercicio: str, credor: dict) -> int:
                 if total == 0:
                     break
 
-            for row in data.get("data", []):
-                portal_id         = _extract_portal_id(row.get("linkDetalhes"))
-                is_new, db_id     = inserir_empenho(conn, exercicio, row, portal_id)
-                if is_new:
-                    novos += 1
-                label = "[+]" if is_new else "[~]"
-                print(f"  {label} {row.get('numeroEmpenho')} | {row.get('unidadeGestora')}"
-                      + (f" | id={portal_id}" if portal_id else ""))
-
-                if portal_id and db_id:
-                    det = _buscar_detalhes(portal_id)
-                    if det:
-                        inserir_detalhe(conn, db_id, portal_id, det)
-                        print(f"    [DET] salvo")
-                    time.sleep(T_SLEEP)
-
+            empenhos_raw.extend(data.get("data", []))
             start += PAGESIZE
             if start >= total:
                 break
-
             time.sleep(T_SLEEP)
+
+        # Passo 2: buscar portal_ids via pesquisa por mes sem NomeCredor
+        ne_meses   = {r["numeroEmpenho"]: r.get("dataDocumento", "") for r in empenhos_raw}
+        portal_ids = _buscar_portal_ids(exercicio, ne_meses)
+
+        # Passo 3: inserir empenhos e buscar detalhes
+        for row in empenhos_raw:
+            num_ne        = row.get("numeroEmpenho")
+            pid           = portal_ids.get(num_ne)
+            is_new, db_id = inserir_empenho(conn, exercicio, row, pid)
+            if is_new:
+                novos += 1
+            label = "[+]" if is_new else "[~]"
+            print(f"  {label} {num_ne} | {row.get('unidadeGestora')}"
+                  + (f" | id={pid}" if pid else ""))
+
+            if pid and db_id:
+                det = _buscar_detalhes(pid)
+                if det:
+                    inserir_detalhe(conn, db_id, pid, det)
+                    print(f"    [DET] salvo")
+                time.sleep(T_SLEEP)
 
         log_fim(conn, log_id, "sucesso", novos)
         print(f"  [OK] {novos} novo(s), demais atualizados")
