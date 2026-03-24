@@ -15,10 +15,12 @@ _SERVICES = {
 
 def _esta_rodando(service: str) -> bool:
     result = subprocess.run(
-        ["docker", "ps", "--filter", f"name={service}", "--format", "{{.Names}}"],
+        ["docker", "ps",
+         "--filter", f"label=com.docker.compose.service={service}",
+         "--format", "{{.Names}}"],
         capture_output=True, text=True, timeout=5,
     )
-    return service in result.stdout
+    return bool(result.stdout.strip())
 
 
 def _disparar(service: str) -> None:
