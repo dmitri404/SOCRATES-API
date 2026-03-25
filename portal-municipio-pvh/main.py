@@ -235,25 +235,18 @@ def inserir_pagamento(conn, row: dict) -> bool:
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO portal_municipio_pvh.pagamentos
-                (despesa_numero, despesa_uuid, data_pagamento,
-                 liquidacao_numero, liquidacao_uuid,
-                 pagamento_numero, pagamento_uuid,
-                 especie, tipo, unidade_orcamentaria,
+                (despesa_numero, data_pagamento, liquidacao_numero,
+                 pagamento_numero, unidade_orcamentaria,
                  valor, favorecido_nome, favorecido_cnpj)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            ON CONFLICT (pagamento_uuid) DO UPDATE SET
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (despesa_numero, pagamento_numero) DO UPDATE SET
                 valor          = EXCLUDED.valor,
                 data_pagamento = EXCLUDED.data_pagamento
         """, (
             row.get("despesa_numero"),
-            row.get("despesa_uuid"),
             _parse_data(row.get("Data")),
             row.get("liquidacao_numero"),
-            row.get("liquidacao_uuid"),
             row.get("pagamento_numero"),
-            row.get("pagamento_uuid"),
-            row.get("Espécie"),
-            row.get("Tipo"),
             row.get("Unidade Orçamentária"),
             _parse_valor(row.get("Valor")),
             row.get("favorecido_nome"),
@@ -261,18 +254,18 @@ def inserir_pagamento(conn, row: dict) -> bool:
         ))
         conn.commit()
         cur.execute(
-            "SELECT xmax FROM portal_municipio_pvh.pagamentos WHERE pagamento_uuid = %s",
-            (row.get("pagamento_uuid"),),
+            "SELECT xmax FROM portal_municipio_pvh.pagamentos WHERE despesa_numero = %s AND pagamento_numero = %s",
+            (row.get("despesa_numero"), row.get("pagamento_numero")),
         )
         r = cur.fetchone()
         return bool(r and int(r[0]) == 0)
 
 
-def atualizar_historico_pagamento(conn, pagamento_uuid: str, historico: str):
+def atualizar_historico_pagamento(conn, despesa_numero: str, pagamento_numero: str, historico: str):
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE portal_municipio_pvh.pagamentos SET historico = %s WHERE pagamento_uuid = %s",
-            (historico, pagamento_uuid),
+            "UPDATE portal_municipio_pvh.pagamentos SET historico = %s WHERE despesa_numero = %s AND pagamento_numero = %s",
+            (historico, despesa_numero, pagamento_numero),
         )
         conn.commit()
 
@@ -454,8 +447,8 @@ def buscar_pagamentos_despesa(conn, despesa_uuid: str, despesa_numero: str,
                     row["pagamento_numero"] = txt
                     row["pagamento_uuid"]   = _uuid_from_url(a["href"])
 
-        if not row.get("pagamento_uuid"):
-            continue  # sem UUID nao conseguimos garantir unicidade
+        if not row.get("pagamento_numero"):
+            continue
 
         is_new = inserir_pagamento(conn, row)
         if is_new:
@@ -464,12 +457,12 @@ def buscar_pagamentos_despesa(conn, despesa_uuid: str, despesa_numero: str,
         print(f"      {label} PAG {row.get('pagamento_numero')} | {row.get('Valor')}")
 
         # Busca historico apenas para registros novos
-        if is_new:
+        if is_new and row.get("pagamento_uuid"):
             try:
                 time.sleep(T_SLEEP)
                 historico = buscar_historico_pagamento(row["pagamento_uuid"])
                 if historico:
-                    atualizar_historico_pagamento(conn, row["pagamento_uuid"], historico)
+                    atualizar_historico_pagamento(conn, row["despesa_numero"], row["pagamento_numero"], historico)
                     print(f"        [HIS] {historico[:80]}...")
             except Exception as exc:
                 print(f"        [ERRO-HIS] {exc}")
