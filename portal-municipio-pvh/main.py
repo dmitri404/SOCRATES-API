@@ -203,7 +203,7 @@ def _varrer(endpoint: str, ano: str, cnpjs: set) -> list:
     result = []
 
     while True:
-        resp = sess.get(url, params={"ano": ano, "por-pagina": PAGESIZE, "pagina": pagina}, timeout=30)
+        resp = sess.get(url, params={"ano": ano, "por-pagina": PAGESIZE, "pagina": pagina}, timeout=120)
         resp.raise_for_status()
         data = resp.json()
 
