@@ -50,9 +50,7 @@ CREATE TABLE IF NOT EXISTS portal_municipio_pvh.despesas (
     id                   SERIAL PRIMARY KEY,
     exercicio            TEXT NOT NULL,
     data_despesa         DATE,
-    numero               TEXT NOT NULL,
-    fase                 TEXT NOT NULL,
-    tipo                 TEXT,
+    numero               TEXT NOT NULL UNIQUE,
     valor                NUMERIC,
     valor_liquidado      NUMERIC,
     valor_pago           NUMERIC,
@@ -62,14 +60,10 @@ CREATE TABLE IF NOT EXISTS portal_municipio_pvh.despesas (
     processo_numero      TEXT,
     historico            TEXT,
     empenho_numero       TEXT,
-    liquidacao_tipo      TEXT,
-    liquidacao_numero    TEXT,
-    classificacao_funcao TEXT,
     favorecido_nome      TEXT,
     favorecido_cnpj      TEXT,
     portal_uuid          TEXT UNIQUE,
-    criado_em            TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE (numero, fase)
+    criado_em            TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- ----------------------------------------------------------------

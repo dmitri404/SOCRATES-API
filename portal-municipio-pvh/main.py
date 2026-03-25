@@ -188,14 +188,13 @@ def inserir_despesa(conn, row: dict) -> bool:
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO portal_municipio_pvh.despesas
-                (exercicio, data_despesa, numero, fase, tipo,
+                (exercicio, data_despesa, numero,
                  valor, valor_liquidado, valor_pago,
                  unidade_gestora, orgao, unidade_orcamentaria,
                  processo_numero, historico, empenho_numero,
-                 liquidacao_tipo, liquidacao_numero, classificacao_funcao,
                  favorecido_nome, favorecido_cnpj, portal_uuid)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            ON CONFLICT (numero, fase) DO UPDATE SET
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (numero) DO UPDATE SET
                 valor           = EXCLUDED.valor,
                 valor_liquidado = EXCLUDED.valor_liquidado,
                 valor_pago      = EXCLUDED.valor_pago,
@@ -204,8 +203,6 @@ def inserir_despesa(conn, row: dict) -> bool:
             row.get("exercicio"),
             _parse_data(row.get("data")),
             row.get("numero"),
-            row.get("fase_nome"),
-            row.get("tipo"),
             _parse_valor(row.get("valor")),
             _parse_valor(row.get("valor_liquidado_brl")),
             _parse_valor(row.get("valor_pago_brl")),
@@ -215,17 +212,14 @@ def inserir_despesa(conn, row: dict) -> bool:
             row.get("processo_numero"),
             row.get("historico"),
             row.get("empenho_numero"),
-            row.get("liquidacao_tipo"),
-            row.get("liquidacao_numero"),
-            row.get("classificacao_funcao"),
             row.get("favorecido_nome"),
             row.get("favorecido_cnpj"),
             row.get("portal_uuid"),
         ))
         conn.commit()
         cur.execute(
-            "SELECT xmax FROM portal_municipio_pvh.despesas WHERE numero = %s AND fase = %s",
-            (row.get("numero"), row.get("fase_nome")),
+            "SELECT xmax FROM portal_municipio_pvh.despesas WHERE numero = %s",
+            (row.get("numero"),),
         )
         r = cur.fetchone()
         return bool(r and int(r[0]) == 0)
@@ -514,7 +508,7 @@ def scrape_credor(conn, exercicio: str, credor: dict) -> tuple[int, int]:
                 if is_new:
                     despesas_novas += 1
                 label = "[+]" if is_new else "[~]"
-                print(f"    {label} {row.get('numero')} | {row.get('fase_nome')} | {row.get('valor')}")
+                print(f"    {label} {row.get('numero')} | {row.get('valor')}")
 
         _processar_rows(rows)
 
