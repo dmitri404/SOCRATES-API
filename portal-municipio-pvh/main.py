@@ -33,8 +33,8 @@ import psycopg2
 # CONSTANTES
 # ═══════════════════════════════════════════════════════════════════
 API_BASE = "https://api.portovelho.ro.gov.br/api/v1"
-PAGESIZE = 100
-T_SLEEP  = 0.3
+PAGESIZE = 25
+T_SLEEP  = 5
 
 _session = None
 
