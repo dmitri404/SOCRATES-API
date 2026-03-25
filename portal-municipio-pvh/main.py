@@ -204,22 +204,39 @@ def inserir_pagamento(conn, row: dict) -> bool:
 # ═══════════════════════════════════════════════════════════════════
 # SCRAPER
 # ═══════════════════════════════════════════════════════════════════
+def _get_com_retry(url: str, params: dict, tentativas: int = 3) -> dict:
+    """GET com retry para erros 5xx e timeout."""
+    for tentativa in range(1, tentativas + 1):
+        try:
+            resp = _get_session().get(url, params=params, timeout=120)
+            if resp.status_code in (502, 503, 504) and tentativa < tentativas:
+                print(f"    [RETRY] {resp.status_code} na tentativa {tentativa}, aguardando 30s...")
+                time.sleep(30)
+                continue
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.Timeout:
+            if tentativa < tentativas:
+                print(f"    [RETRY] timeout na tentativa {tentativa}, aguardando 30s...")
+                time.sleep(30)
+            else:
+                raise
+    raise RuntimeError("Todas as tentativas falharam")
+
+
 def _varrer(endpoint: str, ano: str, mes: int, cnpjs: set) -> list:
     """Varre todas as paginas do endpoint/mes e retorna registros cujo
     favorecido.documento (digits) esteja em cnpjs."""
-    sess   = _get_session()
     url    = f"{API_BASE}{endpoint}"
     pagina = 1
     ultimo = None
     result = []
 
     while True:
-        resp = sess.get(url, params={
+        data = _get_com_retry(url, {
             "ano": ano, "mes": mes,
             "por-pagina": PAGESIZE, "pagina": pagina,
-        }, timeout=120)
-        resp.raise_for_status()
-        data = resp.json()
+        })
 
         if ultimo is None:
             ultimo = data.get("meta", {}).get("last_page", 1)
