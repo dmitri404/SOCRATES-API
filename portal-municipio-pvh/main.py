@@ -268,6 +268,32 @@ def inserir_pagamento(conn, row: dict) -> bool:
         return bool(r and int(r[0]) == 0)
 
 
+def atualizar_historico_pagamento(conn, pagamento_uuid: str, historico: str):
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE portal_municipio_pvh.pagamentos SET historico = %s WHERE pagamento_uuid = %s",
+            (historico, pagamento_uuid),
+        )
+        conn.commit()
+
+
+def buscar_historico_pagamento(pagamento_uuid: str) -> str | None:
+    """GET da pagina de detalhe do pagamento e extrai o texto do campo historico."""
+    url  = f"{PORTAL_URL}/despesas/despesas/{pagamento_uuid}"
+    resp = _get_session().get(url, timeout=300)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "lxml")
+
+    # O historico e o div[placeholder=' '] com o texto mais longo
+    melhor = ""
+    for div in soup.find_all("div", attrs={"placeholder": " "}):
+        txt = div.get_text(" ", strip=True)
+        if len(txt) > len(melhor):
+            melhor = txt
+
+    return melhor or None
+
+
 # ═══════════════════════════════════════════════════════════════════
 # LIVEWIRE
 # ═══════════════════════════════════════════════════════════════════
@@ -436,6 +462,17 @@ def buscar_pagamentos_despesa(conn, despesa_uuid: str, despesa_numero: str,
             novos += 1
         label = "[+]" if is_new else "[~]"
         print(f"      {label} PAG {row.get('pagamento_numero')} | {row.get('Valor')}")
+
+        # Busca historico apenas para registros novos
+        if is_new:
+            try:
+                time.sleep(T_SLEEP)
+                historico = buscar_historico_pagamento(row["pagamento_uuid"])
+                if historico:
+                    atualizar_historico_pagamento(conn, row["pagamento_uuid"], historico)
+                    print(f"        [HIS] {historico[:80]}...")
+            except Exception as exc:
+                print(f"        [ERRO-HIS] {exc}")
 
     return novos
 

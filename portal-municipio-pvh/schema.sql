@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS portal_municipio_pvh.pagamentos (
     valor                NUMERIC,
     favorecido_nome      TEXT,
     favorecido_cnpj      TEXT,
+    historico            TEXT,
     criado_em            TIMESTAMPTZ DEFAULT NOW()
 );
 
