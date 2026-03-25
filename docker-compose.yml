@@ -1,7 +1,7 @@
 services:
 
   portal-municipal-mao:
-    image: socrates:latest
+    build: ./portal-municipio-mao
     container_name: portal-municipal-mao
     restart: no
     volumes:
