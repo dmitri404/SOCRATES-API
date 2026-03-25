@@ -285,10 +285,19 @@ def buscar_historico_pagamento(pagamento_uuid: str) -> str | None:
 # LIVEWIRE
 # ═══════════════════════════════════════════════════════════════════
 def _iniciar_sessao() -> tuple[str, str]:
-    """GET /despesas/ e retorna (csrf_token, snapshot_str)."""
-    print("  [HTTP] GET /despesas/")
-    resp = _get_session().get(DESPESAS_URL, timeout=60)
-    resp.raise_for_status()
+    """GET /despesas/ e retorna (csrf_token, snapshot_str). Retry em caso de timeout."""
+    for tentativa in range(1, 4):
+        try:
+            print(f"  [HTTP] GET /despesas/ (tentativa {tentativa})")
+            resp = _get_session().get(DESPESAS_URL, timeout=120)
+            resp.raise_for_status()
+            break
+        except Exception as exc:
+            if tentativa < 3:
+                print(f"  [RETRY] {exc} — aguardando 60s...")
+                time.sleep(60)
+            else:
+                raise
     soup = BeautifulSoup(resp.text, "lxml")
 
     meta = soup.find("meta", {"name": "csrf-token"})
