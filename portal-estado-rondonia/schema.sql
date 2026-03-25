@@ -77,8 +77,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS empenhos_ne_exercicio_idx
 -- ----------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS portal_estado_ro.empenhos_detalhes (
     id                               SERIAL PRIMARY KEY,
-    empenho_id                       INTEGER NOT NULL REFERENCES portal_estado_ro.empenhos(id) ON DELETE CASCADE,
-    portal_id                        INTEGER NOT NULL,
+    num_ne                           TEXT NOT NULL,
+    exercicio                        TEXT NOT NULL,
+    portal_id                        INTEGER,
     historico                        TEXT,
     modalidade_licitacao             TEXT,
     secretaria                       TEXT,
@@ -99,8 +100,8 @@ CREATE TABLE IF NOT EXISTS portal_estado_ro.empenhos_detalhes (
     criado_em                        TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS empenhos_detalhes_empenho_idx
-    ON portal_estado_ro.empenhos_detalhes (empenho_id);
+CREATE UNIQUE INDEX IF NOT EXISTS empenhos_detalhes_ne_exercicio_idx
+    ON portal_estado_ro.empenhos_detalhes (num_ne, exercicio);
 
 -- ----------------------------------------------------------------
 -- Log de execucoes

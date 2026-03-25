@@ -206,7 +206,7 @@ def _buscar_detalhes(portal_id: int) -> dict | None:
         return None
 
 
-def inserir_detalhe(conn, empenho_id: int, portal_id: int, det: dict) -> None:
+def inserir_detalhe(conn, num_ne: str, exercicio: str, portal_id: int, det: dict) -> None:
     val_cols = [
         "valor_empenhado_final", "valor_pago_exercicio",
         "valor_pago_anos_posteriores", "valor_liquidado_exercicio",
@@ -218,13 +218,14 @@ def inserir_detalhe(conn, empenho_id: int, portal_id: int, det: dict) -> None:
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO portal_estado_ro.empenhos_detalhes
-                (empenho_id, portal_id, historico, modalidade_licitacao, secretaria,
+                (num_ne, exercicio, portal_id, historico, modalidade_licitacao, secretaria,
                  tipo_empenho, efeito, funcao, subfuncao, programa_governo, acao_governo,
                  fonte_recurso, item_despesa, projeto,
                  valor_empenhado_final, valor_pago_exercicio, valor_pago_anos_posteriores,
                  valor_liquidado_exercicio, valor_liquidado_anos_posteriores)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            ON CONFLICT (empenho_id) DO UPDATE SET
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (num_ne, exercicio) DO UPDATE SET
+                portal_id             = EXCLUDED.portal_id,
                 historico             = EXCLUDED.historico,
                 modalidade_licitacao  = EXCLUDED.modalidade_licitacao,
                 secretaria            = EXCLUDED.secretaria,
@@ -243,7 +244,7 @@ def inserir_detalhe(conn, empenho_id: int, portal_id: int, det: dict) -> None:
                 valor_liquidado_exercicio        = EXCLUDED.valor_liquidado_exercicio,
                 valor_liquidado_anos_posteriores = EXCLUDED.valor_liquidado_anos_posteriores
         """, (
-            empenho_id, portal_id,
+            num_ne, exercicio, portal_id,
             det.get("historico"), det.get("modalidade_licitacao"), det.get("secretaria"),
             det.get("tipo_empenho"), det.get("efeito"), det.get("funcao"),
             det.get("subfuncao"), det.get("programa_governo"), det.get("acao_governo"),
@@ -397,10 +398,10 @@ def scrape_exercicio(conn, exercicio: str, credor: dict) -> int:
             print(f"  {label} {num_ne} | {row.get('unidadeGestora')}"
                   + (f" | id={pid}" if pid else ""))
 
-            if pid and db_id:
+            if pid:
                 det = _buscar_detalhes(pid)
                 if det:
-                    inserir_detalhe(conn, db_id, pid, det)
+                    inserir_detalhe(conn, num_ne, exercicio, pid, det)
                     print(f"    [DET] salvo")
                 time.sleep(T_SLEEP)
 
