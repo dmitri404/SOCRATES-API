@@ -210,14 +210,14 @@ def _get_com_retry(url: str, params: dict, tentativas: int = 3) -> dict:
         try:
             resp = _get_session().get(url, params=params, timeout=120)
             if resp.status_code in (502, 503, 504) and tentativa < tentativas:
-                print(f"    [RETRY] {resp.status_code} na tentativa {tentativa}, aguardando 30s...")
+                print(f"    [RETRY] {resp.status_code} na tentativa {tentativa}, aguardando 90s...")
                 time.sleep(30)
                 continue
             resp.raise_for_status()
             return resp.json()
         except requests.exceptions.Timeout:
             if tentativa < tentativas:
-                print(f"    [RETRY] timeout na tentativa {tentativa}, aguardando 30s...")
+                print(f"    [RETRY] timeout na tentativa {tentativa}, aguardando 90s...")
                 time.sleep(30)
             else:
                 raise
