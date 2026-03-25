@@ -204,21 +204,21 @@ def inserir_pagamento(conn, row: dict) -> bool:
 # ═══════════════════════════════════════════════════════════════════
 # SCRAPER
 # ═══════════════════════════════════════════════════════════════════
-def _get_com_retry(url: str, params: dict, tentativas: int = 3) -> dict:
+def _get_com_retry(url: str, params: dict, tentativas: int = 5) -> dict:
     """GET com retry para erros 5xx e timeout."""
     for tentativa in range(1, tentativas + 1):
         try:
             resp = _get_session().get(url, params=params, timeout=120)
             if resp.status_code in (502, 503, 504) and tentativa < tentativas:
-                print(f"    [RETRY] {resp.status_code} na tentativa {tentativa}, aguardando 90s...")
-                time.sleep(30)
+                print(f"    [RETRY] {resp.status_code} na tentativa {tentativa}, aguardando 180s...")
+                time.sleep(180)
                 continue
             resp.raise_for_status()
             return resp.json()
         except requests.exceptions.Timeout:
             if tentativa < tentativas:
-                print(f"    [RETRY] timeout na tentativa {tentativa}, aguardando 90s...")
-                time.sleep(30)
+                print(f"    [RETRY] timeout na tentativa {tentativa}, aguardando 180s...")
+                time.sleep(180)
             else:
                 raise
     raise RuntimeError("Todas as tentativas falharam")
@@ -232,11 +232,22 @@ def _varrer(endpoint: str, ano: str, mes: int, cnpjs: set) -> list:
     ultimo = None
     result = []
 
+    paginas_puladas = 0
+
     while True:
-        data = _get_com_retry(url, {
-            "ano": ano, "mes": mes,
-            "por-pagina": PAGESIZE, "pagina": pagina,
-        })
+        try:
+            data = _get_com_retry(url, {
+                "ano": ano, "mes": mes,
+                "por-pagina": PAGESIZE, "pagina": pagina,
+            })
+        except Exception as exc:
+            print(f"    [SKIP] pagina {pagina} ignorada apos todas as tentativas: {exc}")
+            paginas_puladas += 1
+            if pagina >= (ultimo or pagina):
+                break
+            pagina += 1
+            time.sleep(T_SLEEP)
+            continue
 
         if ultimo is None:
             ultimo = data.get("meta", {}).get("last_page", 1)
@@ -254,6 +265,9 @@ def _varrer(endpoint: str, ano: str, mes: int, cnpjs: set) -> list:
             break
         pagina += 1
         time.sleep(T_SLEEP)
+
+    if paginas_puladas:
+        print(f"    [AVISO] {paginas_puladas} pagina(s) pulada(s) por erro")
 
     return result
 
