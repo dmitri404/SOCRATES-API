@@ -387,7 +387,7 @@ def buscar_pagamentos_despesa(conn, despesa_uuid: str, despesa_numero: str,
     Retorna quantidade de pagamentos novos.
     """
     url  = f"{PORTAL_URL}/despesas/despesas/{despesa_uuid}"
-    resp = _get_session().get(url, timeout=120)
+    resp = _get_session().get(url, timeout=300)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "lxml")
 
