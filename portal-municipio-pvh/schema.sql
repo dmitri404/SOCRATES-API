@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS portal_municipio_pvh.execucao_logs (
     finalizado_em    TIMESTAMPTZ,
     status           TEXT,
     exercicio        TEXT,
+    mes              TEXT,
     empenhos_novos   INTEGER DEFAULT 0,
     pagamentos_novos INTEGER DEFAULT 0,
     mensagem         TEXT

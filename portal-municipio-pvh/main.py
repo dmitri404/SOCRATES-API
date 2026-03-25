@@ -3,10 +3,14 @@ Scraper – Portal da Transparencia de Porto Velho
 API: https://api.portovelho.ro.gov.br/api/v1
 Auth: Nenhuma (API publica)
 
-Fluxo por exercicio/credor:
-  1. GET /despesas/empenhos?ano=X&por-pagina=100&pagina=N  -> filtra por CNPJ
-  2. GET /despesas/pagamentos?ano=X&por-pagina=100&pagina=N -> filtra por CNPJ
+Fluxo por exercicio/mes/credor:
+  1. GET /despesas/empenhos?ano=X&mes=M&por-pagina=100&pagina=N  -> filtra por CNPJ
+  2. GET /despesas/pagamentos?ano=X&mes=M&por-pagina=100&pagina=N -> filtra por CNPJ
   3. Salva no PostgreSQL (schema portal_municipio_pvh)
+
+Otimizacao:
+  - Meses ja processados com sucesso sao pulados
+  - Apenas o mes atual e sempre re-varrido (novos registros aparecem no mes corrente)
 """
 import sys
 import io
@@ -28,9 +32,9 @@ import psycopg2
 # ═══════════════════════════════════════════════════════════════════
 # CONSTANTES
 # ═══════════════════════════════════════════════════════════════════
-API_BASE  = "https://api.portovelho.ro.gov.br/api/v1"
-PAGESIZE  = 100
-T_SLEEP   = 0.3
+API_BASE = "https://api.portovelho.ro.gov.br/api/v1"
+PAGESIZE = 100
+T_SLEEP  = 0.3
 
 _session = None
 
@@ -93,12 +97,23 @@ def carregar_exercicios(conn) -> list:
         return [r[0] for r in cur.fetchall()]
 
 
-def log_inicio(conn, exercicio: str) -> int:
+def mes_ja_processado(conn, exercicio: str, mes: int) -> bool:
+    """Retorna True se o mes ja foi processado com sucesso anteriormente."""
     with conn.cursor() as cur:
         cur.execute("""
-            INSERT INTO portal_municipio_pvh.execucao_logs (status, exercicio)
-            VALUES ('executando', %s) RETURNING id
-        """, (exercicio,))
+            SELECT 1 FROM portal_municipio_pvh.execucao_logs
+            WHERE exercicio = %s AND mes = %s AND status = 'sucesso'
+            LIMIT 1
+        """, (exercicio, str(mes)))
+        return cur.fetchone() is not None
+
+
+def log_inicio(conn, exercicio: str, mes: int) -> int:
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO portal_municipio_pvh.execucao_logs (status, exercicio, mes)
+            VALUES ('executando', %s, %s) RETURNING id
+        """, (exercicio, str(mes)))
         conn.commit()
         return cur.fetchone()[0]
 
@@ -147,9 +162,7 @@ def inserir_empenho(conn, row: dict) -> bool:
             row.get("url"),
         ))
         conn.commit()
-        cur.execute("""
-            SELECT xmax FROM portal_municipio_pvh.empenhos WHERE api_id = %s
-        """, (row.get("id"),))
+        cur.execute("SELECT xmax FROM portal_municipio_pvh.empenhos WHERE api_id = %s", (row.get("id"),))
         r = cur.fetchone()
         return bool(r and int(r[0]) == 0)
 
@@ -183,9 +196,7 @@ def inserir_pagamento(conn, row: dict) -> bool:
             f"{proc.get('numero', '')}",
         ))
         conn.commit()
-        cur.execute("""
-            SELECT xmax FROM portal_municipio_pvh.pagamentos WHERE api_id = %s
-        """, (row.get("id"),))
+        cur.execute("SELECT xmax FROM portal_municipio_pvh.pagamentos WHERE api_id = %s", (row.get("id"),))
         r = cur.fetchone()
         return bool(r and int(r[0]) == 0)
 
@@ -193,8 +204,8 @@ def inserir_pagamento(conn, row: dict) -> bool:
 # ═══════════════════════════════════════════════════════════════════
 # SCRAPER
 # ═══════════════════════════════════════════════════════════════════
-def _varrer(endpoint: str, ano: str, cnpjs: set) -> list:
-    """Varre todas as paginas do endpoint e retorna registros cujo
+def _varrer(endpoint: str, ano: str, mes: int, cnpjs: set) -> list:
+    """Varre todas as paginas do endpoint/mes e retorna registros cujo
     favorecido.documento (digits) esteja em cnpjs."""
     sess   = _get_session()
     url    = f"{API_BASE}{endpoint}"
@@ -203,13 +214,19 @@ def _varrer(endpoint: str, ano: str, cnpjs: set) -> list:
     result = []
 
     while True:
-        resp = sess.get(url, params={"ano": ano, "por-pagina": PAGESIZE, "pagina": pagina}, timeout=120)
+        resp = sess.get(url, params={
+            "ano": ano, "mes": mes,
+            "por-pagina": PAGESIZE, "pagina": pagina,
+        }, timeout=120)
         resp.raise_for_status()
         data = resp.json()
 
         if ultimo is None:
             ultimo = data.get("meta", {}).get("last_page", 1)
-            print(f"  [INFO] {endpoint} ano={ano} | {data.get('meta',{}).get('total',0)} registros / {ultimo} paginas")
+            total  = data.get("meta", {}).get("total", 0)
+            print(f"    [API] {endpoint} {ano}/{mes:02d} | {total} registros / {ultimo} paginas")
+            if total == 0:
+                break
 
         for row in data.get("data", []):
             fav = row.get("favorecido") or {}
@@ -224,41 +241,67 @@ def _varrer(endpoint: str, ano: str, cnpjs: set) -> list:
     return result
 
 
-def scrape_exercicio(conn, exercicio: str, credores: list) -> tuple:
-    cnpjs = {_digits(c["cpf"]) for c in credores}
-    log_id = log_inicio(conn, exercicio)
+def scrape_mes(conn, exercicio: str, mes: int, cnpjs: set) -> tuple:
+    """Processa um mes. Retorna (empenhos_novos, pagamentos_novos)."""
+    log_id = log_inicio(conn, exercicio, mes)
     empenhos_novos = pagamentos_novos = 0
 
     try:
-        # Empenhos
-        empenhos = _varrer("/despesas/empenhos", exercicio, cnpjs)
-        print(f"  [FILTRO] {len(empenhos)} empenho(s) encontrado(s)")
+        empenhos = _varrer("/despesas/empenhos", exercicio, mes, cnpjs)
+        print(f"    [FILTRO] {len(empenhos)} empenho(s) para os credores monitorados")
         for row in empenhos:
             is_new = inserir_empenho(conn, row)
             if is_new:
                 empenhos_novos += 1
             label = "[+]" if is_new else "[~]"
-            print(f"  {label} {row.get('numero')} | {(row.get('favorecido') or {}).get('nome')}")
+            print(f"    {label} NE {row.get('numero')} | {(row.get('favorecido') or {}).get('nome')}")
 
-        # Pagamentos
-        pagamentos = _varrer("/despesas/pagamentos", exercicio, cnpjs)
-        print(f"  [FILTRO] {len(pagamentos)} pagamento(s) encontrado(s)")
+        pagamentos = _varrer("/despesas/pagamentos", exercicio, mes, cnpjs)
+        print(f"    [FILTRO] {len(pagamentos)} pagamento(s) para os credores monitorados")
         for row in pagamentos:
             is_new = inserir_pagamento(conn, row)
             if is_new:
                 pagamentos_novos += 1
             label = "[+]" if is_new else "[~]"
-            print(f"  {label} PAG {row.get('numero')} | {(row.get('favorecido') or {}).get('nome')}")
+            print(f"    {label} PAG {row.get('numero')} | {(row.get('favorecido') or {}).get('nome')}")
 
         log_fim(conn, log_id, "sucesso", empenhos_novos, pagamentos_novos)
-        print(f"  [OK] {empenhos_novos} empenho(s) novo(s), {pagamentos_novos} pagamento(s) novo(s)")
         return empenhos_novos, pagamentos_novos
 
     except Exception as exc:
         msg = str(exc)
         log_fim(conn, log_id, "erro", empenhos_novos, pagamentos_novos, msg)
-        print(f"  [ERRO] {msg}")
+        print(f"    [ERRO] {msg}")
         raise
+
+
+def scrape_exercicio(conn, exercicio: str, cnpjs: set) -> tuple:
+    agora      = datetime.now()
+    ano_atual  = agora.year
+    mes_atual  = agora.month
+    exercicio_int = int(exercicio)
+
+    # Determina ate qual mes varrer
+    if exercicio_int < ano_atual:
+        meses = range(1, 13)
+    else:
+        meses = range(1, mes_atual + 1)
+
+    total_emp = total_pag = 0
+
+    for mes in meses:
+        eh_mes_atual = (exercicio_int == ano_atual and mes == mes_atual)
+
+        if not eh_mes_atual and mes_ja_processado(conn, exercicio, mes):
+            print(f"  [SKIP] {exercicio}/{mes:02d} ja processado")
+            continue
+
+        print(f"  [MES] {exercicio}/{mes:02d}{' (atual)' if eh_mes_atual else ''}")
+        e, p = scrape_mes(conn, exercicio, mes, cnpjs)
+        total_emp += e
+        total_pag += p
+
+    return total_emp, total_pag
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -335,11 +378,12 @@ def main():
         conn.close()
         return
 
+    cnpjs = {_digits(c["cpf"]) for c in credores}
     print(f"[CONF] {len(credores)} credor(es) | exercicios: {exercicios}")
 
     for exercicio in exercicios:
         print(f"\n[EXERCICIO] {exercicio}")
-        e, p = scrape_exercicio(conn, exercicio, credores)
+        e, p = scrape_exercicio(conn, exercicio, cnpjs)
         total_emp += e
         total_pag += p
 
