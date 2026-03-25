@@ -76,7 +76,7 @@ services:
       - supabase_default
 
   portal-estado-ro:
-    build: ./portal-estado-rondonia
+    build: ./portal-estado-ro
     container_name: portal-estado-ro
     restart: no
     volumes:
