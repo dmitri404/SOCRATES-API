@@ -1,21 +1,10 @@
 -- ================================================================
 -- Schema: portal_municipio_pvh
 -- Portal da Transparencia de Porto Velho
--- API: https://api.portovelho.ro.gov.br/api/v1
+-- Portal: https://transparencia.portovelho.ro.gov.br/despesas/
 -- ================================================================
 
 CREATE SCHEMA IF NOT EXISTS portal_municipio_pvh;
-
--- ----------------------------------------------------------------
--- Configuracao do scraper
--- ----------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS portal_municipio_pvh.conf (
-    id            SERIAL PRIMARY KEY,
-    url_base      TEXT NOT NULL DEFAULT 'https://api.portovelho.ro.gov.br/api/v1',
-    modo_limpar   BOOLEAN NOT NULL DEFAULT false,
-    criado_em     TIMESTAMPTZ DEFAULT NOW(),
-    atualizado_em TIMESTAMPTZ DEFAULT NOW()
-);
 
 -- ----------------------------------------------------------------
 -- CPFs/CNPJs monitorados
@@ -55,44 +44,31 @@ INSERT INTO portal_municipio_pvh.conf_exercicios (exercicio) VALUES ('2026')
 ON CONFLICT (exercicio) DO NOTHING;
 
 -- ----------------------------------------------------------------
--- Empenhos
+-- Despesas (empenhos, liquidacoes, pagamentos unificados)
 -- ----------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS portal_municipio_pvh.empenhos (
-    id               SERIAL PRIMARY KEY,
-    api_id           TEXT NOT NULL UNIQUE,
-    num_ne           TEXT,
-    ano              INTEGER,
-    data_empenho     DATE,
-    tipo             TEXT,
-    valor            NUMERIC,
-    historico        TEXT,
-    favorecido_nome  TEXT,
-    favorecido_cnpj  TEXT,
-    unidade_gestora  TEXT,
-    orgao            TEXT,
-    natureza         TEXT,
-    processo_numero  TEXT,
-    url              TEXT,
-    criado_em        TIMESTAMPTZ DEFAULT NOW()
-);
-
--- ----------------------------------------------------------------
--- Pagamentos
--- ----------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS portal_municipio_pvh.pagamentos (
-    id               SERIAL PRIMARY KEY,
-    api_id           TEXT NOT NULL UNIQUE,
-    num_pagamento    TEXT,
-    ano              INTEGER,
-    data_pagamento   DATE,
-    tipo             TEXT,
-    valor            NUMERIC,
-    favorecido_nome  TEXT,
-    favorecido_cnpj  TEXT,
-    unidade_gestora  TEXT,
-    orgao            TEXT,
-    processo_numero  TEXT,
-    criado_em        TIMESTAMPTZ DEFAULT NOW()
+CREATE TABLE IF NOT EXISTS portal_municipio_pvh.despesas (
+    id                   SERIAL PRIMARY KEY,
+    exercicio            TEXT NOT NULL,
+    data_despesa         DATE,
+    numero               TEXT NOT NULL,
+    fase                 TEXT NOT NULL,
+    tipo                 TEXT,
+    valor                NUMERIC,
+    valor_liquidado      NUMERIC,
+    valor_pago           NUMERIC,
+    unidade_gestora      TEXT,
+    orgao                TEXT,
+    unidade_orcamentaria TEXT,
+    processo_numero      TEXT,
+    historico            TEXT,
+    empenho_numero       TEXT,
+    liquidacao_tipo      TEXT,
+    liquidacao_numero    TEXT,
+    classificacao_funcao TEXT,
+    favorecido_nome      TEXT,
+    favorecido_cnpj      TEXT,
+    criado_em            TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (numero, fase)
 );
 
 -- ----------------------------------------------------------------
@@ -104,8 +80,7 @@ CREATE TABLE IF NOT EXISTS portal_municipio_pvh.execucao_logs (
     finalizado_em    TIMESTAMPTZ,
     status           TEXT,
     exercicio        TEXT,
-    mes              TEXT,
-    empenhos_novos   INTEGER DEFAULT 0,
-    pagamentos_novos INTEGER DEFAULT 0,
+    cpf              TEXT,
+    despesas_novas   INTEGER DEFAULT 0,
     mensagem         TEXT
 );

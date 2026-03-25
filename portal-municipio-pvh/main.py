@@ -1,16 +1,18 @@
 """
 Scraper – Portal da Transparencia de Porto Velho
-API: https://api.portovelho.ro.gov.br/api/v1
-Auth: Nenhuma (API publica)
+Portal: https://transparencia.portovelho.ro.gov.br/despesas/
+Tecnologia: Laravel Livewire v3 + PowerGrid
 
-Fluxo por exercicio/mes/credor:
-  1. GET /despesas/empenhos?ano=X&mes=M&por-pagina=100&pagina=N  -> filtra por CNPJ
-  2. GET /despesas/pagamentos?ano=X&mes=M&por-pagina=100&pagina=N -> filtra por CNPJ
-  3. Salva no PostgreSQL (schema portal_municipio_pvh)
+Fluxo por exercicio/credor:
+  1. GET /despesas/ -> extrai CSRF token + wire:snapshot do componente
+  2. POST /livewire/update com search=CNPJ + filtro_ano -> HTML filtrado
+  3. Parseia linhas da tabela (BeautifulSoup)
+  4. Pagina via gotoPage() ate fim
+  5. Salva no PostgreSQL (schema portal_municipio_pvh)
 
 Otimizacao:
-  - Meses ja processados com sucesso sao pulados
-  - Apenas o mes atual e sempre re-varrido (novos registros aparecem no mes corrente)
+  - Exercicios passados ja processados sao pulados
+  - O exercicio atual e sempre re-varrido
 """
 import sys
 import io
@@ -28,13 +30,34 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="repla
 
 import requests
 import psycopg2
+from bs4 import BeautifulSoup
 
-# ═══════════════════════════════════════════════════════════════════
-# CONSTANTES
-# ═══════════════════════════════════════════════════════════════════
-API_BASE = "https://api.portovelho.ro.gov.br/api/v1"
-PAGESIZE = 25
-T_SLEEP  = 5
+PORTAL_URL   = "https://transparencia.portovelho.ro.gov.br"
+DESPESAS_URL = PORTAL_URL + "/despesas/"
+LIVEWIRE_URL = PORTAL_URL + "/livewire/update"
+T_SLEEP      = 3
+
+# Ordem das colunas da tabela PowerGrid (data-column nos <th>)
+COL_ORDER = [
+    "actions",
+    "unidade_gestora_id",
+    "orgao",
+    "unidade_orcamentaria",
+    "ano",
+    "data",
+    "numero",
+    "fase_nome",
+    "tipo",
+    "valor",
+    "valor_liquidado_brl",
+    "valor_pago_brl",
+    "processo_numero",
+    "historico",
+    "empenho_numero",
+    "liquidacao_tipo",
+    "liquidacao_numero",
+    "classificacao_funcao",
+]
 
 _session = None
 
@@ -43,7 +66,11 @@ def _get_session() -> requests.Session:
     global _session
     if _session is None:
         _session = requests.Session()
-        _session.headers.update({"Accept": "application/json"})
+        _session.headers.update({
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "pt-BR,pt;q=0.9",
+        })
     return _session
 
 
@@ -51,17 +78,21 @@ def _digits(s: str) -> str:
     return re.sub(r"\D", "", s or "")
 
 
-def _match_cnpj(doc_api: str, cnpj_conf: str) -> bool:
-    return _digits(doc_api) == _digits(cnpj_conf)
-
-
 def _parse_valor(v) -> float | None:
-    if v is None:
+    if not v:
         return None
-    if isinstance(v, dict):
-        return v.get("value")
+    cleaned = re.sub(r"[^\d,]", "", str(v)).replace(",", ".")
     try:
-        return float(v)
+        return float(cleaned) if cleaned else None
+    except Exception:
+        return None
+
+
+def _parse_data(s: str):
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s.strip(), "%d/%m/%Y").date()
     except Exception:
         return None
 
@@ -97,249 +128,248 @@ def carregar_exercicios(conn) -> list:
         return [r[0] for r in cur.fetchall()]
 
 
-def mes_ja_processado(conn, exercicio: str, mes: int) -> bool:
-    """Retorna True se o mes ja foi processado com sucesso anteriormente."""
+def exercicio_ja_processado(conn, exercicio: str, cpf: str) -> bool:
     with conn.cursor() as cur:
         cur.execute("""
             SELECT 1 FROM portal_municipio_pvh.execucao_logs
-            WHERE exercicio = %s AND mes = %s AND status = 'sucesso'
+            WHERE exercicio = %s AND cpf = %s AND status = 'sucesso'
             LIMIT 1
-        """, (exercicio, str(mes)))
+        """, (exercicio, cpf))
         return cur.fetchone() is not None
 
 
-def log_inicio(conn, exercicio: str, mes: int) -> int:
+def log_inicio(conn, exercicio: str, cpf: str) -> int:
     with conn.cursor() as cur:
         cur.execute("""
-            INSERT INTO portal_municipio_pvh.execucao_logs (status, exercicio, mes)
+            INSERT INTO portal_municipio_pvh.execucao_logs (status, exercicio, cpf)
             VALUES ('executando', %s, %s) RETURNING id
-        """, (exercicio, str(mes)))
+        """, (exercicio, cpf))
         conn.commit()
         return cur.fetchone()[0]
 
 
-def log_fim(conn, log_id: int, status: str, empenhos_novos: int,
-            pagamentos_novos: int, mensagem: str = ""):
+def log_fim(conn, log_id: int, status: str, despesas_novas: int, mensagem: str = ""):
     with conn.cursor() as cur:
         cur.execute("""
             UPDATE portal_municipio_pvh.execucao_logs
-            SET finalizado_em = NOW(), status = %s,
-                empenhos_novos = %s, pagamentos_novos = %s, mensagem = %s
+            SET finalizado_em = NOW(), status = %s, despesas_novas = %s, mensagem = %s
             WHERE id = %s
-        """, (status, empenhos_novos, pagamentos_novos, mensagem, log_id))
+        """, (status, despesas_novas, mensagem, log_id))
         conn.commit()
 
 
-def inserir_empenho(conn, row: dict) -> bool:
-    fav  = row.get("favorecido") or {}
-    nat  = row.get("natureza_orcamentaria") or {}
-    ug   = row.get("unidade_gestora") or {}
-    proc = row.get("processo") or {}
+def inserir_despesa(conn, row: dict) -> bool:
     with conn.cursor() as cur:
         cur.execute("""
-            INSERT INTO portal_municipio_pvh.empenhos
-                (api_id, num_ne, ano, data_empenho, tipo, valor, historico,
-                 favorecido_nome, favorecido_cnpj, unidade_gestora, orgao,
-                 natureza, processo_numero, url)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            ON CONFLICT (api_id) DO UPDATE SET
+            INSERT INTO portal_municipio_pvh.despesas
+                (exercicio, data_despesa, numero, fase, tipo,
+                 valor, valor_liquidado, valor_pago,
+                 unidade_gestora, orgao, unidade_orcamentaria,
+                 processo_numero, historico, empenho_numero,
+                 liquidacao_tipo, liquidacao_numero, classificacao_funcao,
+                 favorecido_nome, favorecido_cnpj)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (numero, fase) DO UPDATE SET
                 valor           = EXCLUDED.valor,
-                favorecido_nome = EXCLUDED.favorecido_nome
+                valor_liquidado = EXCLUDED.valor_liquidado,
+                valor_pago      = EXCLUDED.valor_pago
         """, (
-            row.get("id"),
+            row.get("exercicio"),
+            _parse_data(row.get("data")),
             row.get("numero"),
-            row.get("ano"),
-            row.get("data_documento"),
-            row.get("documento"),
-            _parse_valor(row.get("valor")),
-            row.get("historico"),
-            fav.get("nome"),
-            _digits(fav.get("documento", "")),
-            ug.get("nome"),
-            nat.get("orgao"),
-            nat.get("plano_conta"),
-            f"{proc.get('numero', '')}",
-            row.get("url"),
-        ))
-        conn.commit()
-        cur.execute("SELECT xmax FROM portal_municipio_pvh.empenhos WHERE api_id = %s", (row.get("id"),))
-        r = cur.fetchone()
-        return bool(r and int(r[0]) == 0)
-
-
-def inserir_pagamento(conn, row: dict) -> bool:
-    fav  = row.get("favorecido") or {}
-    nat  = row.get("natureza_orcamentaria") or {}
-    ug   = row.get("unidade_gestora") or {}
-    proc = row.get("processo") or {}
-    with conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO portal_municipio_pvh.pagamentos
-                (api_id, num_pagamento, ano, data_pagamento, tipo, valor,
-                 favorecido_nome, favorecido_cnpj, unidade_gestora, orgao,
-                 processo_numero)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            ON CONFLICT (api_id) DO UPDATE SET
-                valor           = EXCLUDED.valor,
-                favorecido_nome = EXCLUDED.favorecido_nome
-        """, (
-            row.get("id"),
-            row.get("numero"),
-            row.get("ano"),
-            row.get("data_documento"),
+            row.get("fase_nome"),
             row.get("tipo"),
             _parse_valor(row.get("valor")),
-            fav.get("nome"),
-            _digits(fav.get("documento", "")),
-            ug.get("nome"),
-            nat.get("orgao"),
-            f"{proc.get('numero', '')}",
+            _parse_valor(row.get("valor_liquidado_brl")),
+            _parse_valor(row.get("valor_pago_brl")),
+            row.get("unidade_gestora_id"),
+            row.get("orgao"),
+            row.get("unidade_orcamentaria"),
+            row.get("processo_numero"),
+            row.get("historico"),
+            row.get("empenho_numero"),
+            row.get("liquidacao_tipo"),
+            row.get("liquidacao_numero"),
+            row.get("classificacao_funcao"),
+            row.get("favorecido_nome"),
+            row.get("favorecido_cnpj"),
         ))
         conn.commit()
-        cur.execute("SELECT xmax FROM portal_municipio_pvh.pagamentos WHERE api_id = %s", (row.get("id"),))
+        cur.execute(
+            "SELECT xmax FROM portal_municipio_pvh.despesas WHERE numero = %s AND fase = %s",
+            (row.get("numero"), row.get("fase_nome")),
+        )
         r = cur.fetchone()
         return bool(r and int(r[0]) == 0)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# LIVEWIRE
+# ═══════════════════════════════════════════════════════════════════
+def _iniciar_sessao() -> tuple[str, str]:
+    """GET /despesas/ e retorna (csrf_token, snapshot_str)."""
+    print("  [HTTP] GET /despesas/")
+    resp = _get_session().get(DESPESAS_URL, timeout=60)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "lxml")
+
+    meta = soup.find("meta", {"name": "csrf-token"})
+    if not meta:
+        raise RuntimeError("CSRF token nao encontrado na pagina")
+    csrf = meta["content"]
+
+    # Componente principal: o que tem filtro_ano ou search nos dados
+    snapshot_str = None
+    for el in soup.find_all(attrs={"wire:snapshot": True}):
+        snap_raw = el.get("wire:snapshot", "")
+        try:
+            snap = json.loads(snap_raw)
+            data = snap.get("data", {})
+            if "filtro_ano" in data or "search" in data:
+                snapshot_str = snap_raw
+                break
+        except Exception:
+            continue
+
+    if not snapshot_str:
+        raise RuntimeError("Snapshot Livewire nao encontrado na pagina")
+
+    print(f"  [LW] Sessao iniciada | CSRF={csrf[:10]}...")
+    return csrf, snapshot_str
+
+
+def _lw_post(csrf: str, snapshot_str: str,
+             updates: dict | None = None,
+             calls: list | None = None) -> tuple[str, str]:
+    """POST /livewire/update. Retorna (novo_snapshot, html_effects)."""
+    payload = {
+        "components": [{
+            "snapshot": snapshot_str,
+            "updates":  updates or {},
+            "calls":    calls   or [],
+        }]
+    }
+    headers = {
+        "X-CSRF-TOKEN":  csrf,
+        "X-Livewire":    "true",
+        "Content-Type":  "application/json",
+        "Accept":        "text/html, application/xhtml+xml",
+        "Referer":       DESPESAS_URL,
+    }
+    resp = _get_session().post(LIVEWIRE_URL, json=payload, headers=headers, timeout=60)
+    resp.raise_for_status()
+
+    data     = resp.json()
+    comp     = data["components"][0]
+    new_snap = comp["snapshot"]
+    html     = comp.get("effects", {}).get("html") or ""
+    return new_snap, html
+
+
+def _extrair_linhas(html: str) -> tuple[list, int]:
+    """Extrai linhas da tabela e total de paginas do HTML retornado pelo Livewire."""
+    soup  = BeautifulSoup(html, "lxml")
+    tbody = soup.find("tbody")
+    if not tbody:
+        return [], 1
+
+    # Detecta colunas pelo thead (disponivel no HTML completo, nao no parcial)
+    thead = soup.find("thead")
+    col_order = COL_ORDER
+    if thead:
+        cols = [th.get("data-column", "") for th in thead.find_all("th")]
+        if cols:
+            col_order = cols
+
+    rows = []
+    for tr in tbody.find_all("tr"):
+        cells = tr.find_all("td")
+        if len(cells) <= 1:
+            continue  # linha vazia ou "sem registros"
+        row = {}
+        for i, col in enumerate(col_order):
+            if col != "actions" and i < len(cells):
+                row[col] = cells[i].get_text(" ", strip=True)
+        rows.append(row)
+
+    # Total de paginas: botoes numerados na paginacao
+    total_pages = 1
+    nav = soup.find("nav", attrs={"aria-label": re.compile(r"pagination", re.I)})
+    if nav:
+        btns = [b.get_text(strip=True) for b in nav.find_all(["button", "span"])
+                if b.get_text(strip=True).isdigit()]
+        if btns:
+            total_pages = max(int(x) for x in btns)
+
+    return rows, total_pages
 
 
 # ═══════════════════════════════════════════════════════════════════
 # SCRAPER
 # ═══════════════════════════════════════════════════════════════════
-def _get_com_retry(url: str, params: dict, tentativas: int = 5) -> dict:
-    """GET com retry para erros 5xx e timeout."""
-    for tentativa in range(1, tentativas + 1):
-        try:
-            resp = _get_session().get(url, params=params, timeout=120)
-            if resp.status_code in (502, 503, 504) and tentativa < tentativas:
-                print(f"    [RETRY] {resp.status_code} na tentativa {tentativa}, aguardando 180s...")
-                time.sleep(180)
-                continue
-            resp.raise_for_status()
-            return resp.json()
-        except requests.exceptions.Timeout:
-            if tentativa < tentativas:
-                print(f"    [RETRY] timeout na tentativa {tentativa}, aguardando 180s...")
-                time.sleep(180)
-            else:
-                raise
-    raise RuntimeError("Todas as tentativas falharam")
-
-
-def _varrer(endpoint: str, ano: str, mes: int, cnpjs: set) -> list:
-    """Varre todas as paginas do endpoint/mes e retorna registros cujo
-    favorecido.documento (digits) esteja em cnpjs."""
-    url    = f"{API_BASE}{endpoint}"
-    pagina = 1
-    ultimo = None
-    result = []
-
-    paginas_puladas = 0
-
-    while True:
-        try:
-            data = _get_com_retry(url, {
-                "ano": ano, "mes": mes,
-                "por-pagina": PAGESIZE, "pagina": pagina,
-            })
-        except Exception as exc:
-            print(f"    [SKIP] pagina {pagina} ignorada apos todas as tentativas: {exc}")
-            paginas_puladas += 1
-            if pagina >= (ultimo or pagina):
-                break
-            pagina += 1
-            time.sleep(T_SLEEP)
-            continue
-
-        if ultimo is None:
-            ultimo = data.get("meta", {}).get("last_page", 1)
-            total  = data.get("meta", {}).get("total", 0)
-            print(f"    [API] {endpoint} {ano}/{mes:02d} | {total} registros / {ultimo} paginas")
-            if total == 0:
-                break
-
-        for row in data.get("data", []):
-            fav = row.get("favorecido") or {}
-            if _digits(fav.get("documento", "")) in cnpjs:
-                result.append(row)
-
-        if pagina >= ultimo:
-            break
-        pagina += 1
-        time.sleep(T_SLEEP)
-
-    if paginas_puladas:
-        print(f"    [AVISO] {paginas_puladas} pagina(s) pulada(s) por erro")
-
-    return result
-
-
-def scrape_mes(conn, exercicio: str, mes: int, cnpjs: set) -> tuple:
-    """Processa um mes. Retorna (empenhos_novos, pagamentos_novos)."""
-    log_id = log_inicio(conn, exercicio, mes)
-    empenhos_novos = pagamentos_novos = 0
+def scrape_credor(conn, exercicio: str, credor: dict) -> int:
+    """Raspa todos os registros de um credor num exercicio. Retorna despesas_novas."""
+    cpf    = _digits(credor["cpf"])
+    nome   = credor["nome"]
+    log_id = log_inicio(conn, exercicio, cpf)
+    despesas_novas = 0
 
     try:
-        empenhos = _varrer("/despesas/empenhos", exercicio, mes, cnpjs)
-        print(f"    [FILTRO] {len(empenhos)} empenho(s) para os credores monitorados")
-        for row in empenhos:
-            is_new = inserir_empenho(conn, row)
-            if is_new:
-                empenhos_novos += 1
-            label = "[+]" if is_new else "[~]"
-            print(f"    {label} NE {row.get('numero')} | {(row.get('favorecido') or {}).get('nome')}")
+        csrf, snapshot = _iniciar_sessao()
+        time.sleep(T_SLEEP)
 
-        pagamentos = _varrer("/despesas/pagamentos", exercicio, mes, cnpjs)
-        print(f"    [FILTRO] {len(pagamentos)} pagamento(s) para os credores monitorados")
-        for row in pagamentos:
-            is_new = inserir_pagamento(conn, row)
-            if is_new:
-                pagamentos_novos += 1
-            label = "[+]" if is_new else "[~]"
-            print(f"    {label} PAG {row.get('numero')} | {(row.get('favorecido') or {}).get('nome')}")
+        # Aplica filtros: ano + busca por CNPJ
+        print(f"  [LW] filtro_ano={exercicio}  search={cpf}")
+        snapshot, html = _lw_post(csrf, snapshot, updates={
+            "filtro_ano": int(exercicio),
+            "search":     cpf,
+        })
+        time.sleep(T_SLEEP)
 
-        log_fim(conn, log_id, "sucesso", empenhos_novos, pagamentos_novos)
-        return empenhos_novos, pagamentos_novos
+        rows, total_pages = _extrair_linhas(html)
+        print(f"  [LW] pagina 1/{total_pages} | {len(rows)} linha(s)")
+
+        def _processar_rows(rows):
+            nonlocal despesas_novas
+            for row in rows:
+                row["exercicio"]      = exercicio
+                row["favorecido_nome"] = nome
+                row["favorecido_cnpj"] = cpf
+                if not row.get("numero"):
+                    continue
+                is_new = inserir_despesa(conn, row)
+                if is_new:
+                    despesas_novas += 1
+                label = "[+]" if is_new else "[~]"
+                print(f"    {label} {row.get('numero')} | {row.get('fase_nome')} | {row.get('valor')}")
+
+        _processar_rows(rows)
+
+        for pagina in range(2, total_pages + 1):
+            print(f"  [LW] pagina {pagina}/{total_pages}")
+            snapshot, html = _lw_post(csrf, snapshot, calls=[
+                {"path": "", "method": "gotoPage", "params": [pagina, "page"]}
+            ])
+            rows, _ = _extrair_linhas(html)
+            print(f"       {len(rows)} linha(s)")
+            _processar_rows(rows)
+            time.sleep(T_SLEEP)
+
+        log_fim(conn, log_id, "sucesso", despesas_novas)
+        return despesas_novas
 
     except Exception as exc:
         msg = str(exc)
-        log_fim(conn, log_id, "erro", empenhos_novos, pagamentos_novos, msg)
-        print(f"    [ERRO] {msg}")
+        log_fim(conn, log_id, "erro", despesas_novas, msg)
+        print(f"  [ERRO] {msg}")
         raise
-
-
-def scrape_exercicio(conn, exercicio: str, cnpjs: set) -> tuple:
-    agora      = datetime.now()
-    ano_atual  = agora.year
-    mes_atual  = agora.month
-    exercicio_int = int(exercicio)
-
-    # Determina ate qual mes varrer
-    if exercicio_int < ano_atual:
-        meses = range(1, 13)
-    else:
-        meses = range(1, mes_atual + 1)
-
-    total_emp = total_pag = 0
-
-    for mes in meses:
-        eh_mes_atual = (exercicio_int == ano_atual and mes == mes_atual)
-
-        if not eh_mes_atual and mes_ja_processado(conn, exercicio, mes):
-            print(f"  [SKIP] {exercicio}/{mes:02d} ja processado")
-            continue
-
-        print(f"  [MES] {exercicio}/{mes:02d}{' (atual)' if eh_mes_atual else ''}")
-        e, p = scrape_mes(conn, exercicio, mes, cnpjs)
-        total_emp += e
-        total_pag += p
-
-    return total_emp, total_pag
 
 
 # ═══════════════════════════════════════════════════════════════════
 # EMAIL
 # ═══════════════════════════════════════════════════════════════════
 def enviar_email(destinatarios: list, inicio: datetime, fim: datetime,
-                 total_empenhos: int, total_pagamentos: int, credores: list):
+                 total: int, credores: list):
     if not destinatarios:
         print("[EMAIL] Nenhum destinatario em conf_emails, e-mail nao enviado")
         return
@@ -366,8 +396,7 @@ def enviar_email(destinatarios: list, inicio: datetime, fim: datetime,
         f"Inicio  : {inicio.strftime('%d/%m/%Y %H:%M:%S')}\n"
         f"Fim     : {fim.strftime('%d/%m/%Y %H:%M:%S')}\n"
         f"Duracao : {duracao}\n\n"
-        f"Empenhos novos  : {total_empenhos}\n"
-        f"Pagamentos novos: {total_pagamentos}\n\n"
+        f"Despesas novas: {total}\n\n"
         f"Credores: {nomes}\n\n"
         "Mensagem automatica gerada pelo scraper."
     )
@@ -401,26 +430,33 @@ def main():
     exercicios = carregar_exercicios(conn)
     emails     = carregar_conf_emails(conn)
     inicio     = datetime.now()
-    total_emp  = 0
-    total_pag  = 0
+    total      = 0
 
     if not credores:
         print("[AVISO] Nenhum credor ativo em conf_cpfs, encerrando")
         conn.close()
         return
 
-    cnpjs = {_digits(c["cpf"]) for c in credores}
     print(f"[CONF] {len(credores)} credor(es) | exercicios: {exercicios}")
 
+    ano_atual = datetime.now().year
+
     for exercicio in exercicios:
-        print(f"\n[EXERCICIO] {exercicio}")
-        e, p = scrape_exercicio(conn, exercicio, cnpjs)
-        total_emp += e
-        total_pag += p
+        for credor in credores:
+            cpf = _digits(credor["cpf"])
+            print(f"\n[EXERCICIO] {exercicio} | {credor['nome']}")
+
+            eh_atual = int(exercicio) >= ano_atual
+            if not eh_atual and exercicio_ja_processado(conn, exercicio, cpf):
+                print("  [SKIP] ja processado com sucesso")
+                continue
+
+            n = scrape_credor(conn, exercicio, credor)
+            total += n
 
     conn.close()
     fim = datetime.now()
-    enviar_email(emails, inicio, fim, total_emp, total_pag, credores)
+    enviar_email(emails, inicio, fim, total, credores)
     print("\n[FIM] Scraper concluido")
 
 
