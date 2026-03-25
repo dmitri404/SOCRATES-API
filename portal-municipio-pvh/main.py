@@ -57,6 +57,18 @@ COL_ORDER = [
     "liquidacao_tipo",
     "liquidacao_numero",
     "classificacao_funcao",
+    "classificacao_subfuncao",
+    "programa",
+    "projeto",
+    "plano_conta",
+    "plano_conta_categoria",
+    "plano_conta_grupo",
+    "plano_conta_modalidade",
+    "plano_conta_elemento",
+    "fonte_recurso",
+    "favorecido_nome",
+    "favorecido_documento",
+    "documento_fiscal",
 ]
 
 _session = None
@@ -286,6 +298,10 @@ def _extrair_linhas(html: str) -> tuple[list, int]:
         cells = tr.find_all("td")
         if len(cells) <= 1:
             continue  # linha vazia ou "sem registros"
+        # Pula linha de sumario (ex: "Soma: R$ X")
+        row_text = tr.get_text(" ", strip=True)
+        if "Soma:" in row_text or "soma:" in row_text:
+            continue
         row = {}
         for i, col in enumerate(col_order):
             if col != "actions" and i < len(cells):
@@ -318,11 +334,11 @@ def scrape_credor(conn, exercicio: str, credor: dict) -> int:
         csrf, snapshot = _iniciar_sessao()
         time.sleep(T_SLEEP)
 
-        # Aplica filtros: ano + busca por CNPJ
-        print(f"  [LW] filtro_ano={exercicio}  search={cpf}")
+        # Aplica filtros: ano + busca por nome do credor
+        print(f"  [LW] filtro_ano={exercicio}  search={nome!r}")
         snapshot, html = _lw_post(csrf, snapshot, updates={
             "filtro_ano": int(exercicio),
-            "search":     cpf,
+            "search":     nome,
         })
         time.sleep(T_SLEEP)
 
@@ -332,9 +348,15 @@ def scrape_credor(conn, exercicio: str, credor: dict) -> int:
         def _processar_rows(rows):
             nonlocal despesas_novas
             for row in rows:
-                row["exercicio"]      = exercicio
-                row["favorecido_nome"] = nome
-                row["favorecido_cnpj"] = cpf
+                row["exercicio"] = exercicio
+                # favorecido_nome e favorecido_documento vem do HTML
+                # mas usamos conf como fallback
+                if not row.get("favorecido_nome"):
+                    row["favorecido_nome"] = nome
+                # normaliza cnpj: favorecido_documento -> favorecido_cnpj
+                row["favorecido_cnpj"] = _digits(
+                    row.get("favorecido_documento") or cpf
+                )
                 if not row.get("numero"):
                     continue
                 is_new = inserir_despesa(conn, row)
