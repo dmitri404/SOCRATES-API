@@ -67,8 +67,30 @@ CREATE TABLE IF NOT EXISTS portal_municipio_pvh.despesas (
     classificacao_funcao TEXT,
     favorecido_nome      TEXT,
     favorecido_cnpj      TEXT,
+    portal_uuid          TEXT UNIQUE,
     criado_em            TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE (numero, fase)
+);
+
+-- ----------------------------------------------------------------
+-- Pagamentos (vindos da pagina de detalhe de cada despesa)
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS portal_municipio_pvh.pagamentos (
+    id                   SERIAL PRIMARY KEY,
+    despesa_numero       TEXT,
+    despesa_uuid         TEXT,
+    data_pagamento       DATE,
+    liquidacao_numero    TEXT,
+    liquidacao_uuid      TEXT,
+    pagamento_numero     TEXT,
+    pagamento_uuid       TEXT UNIQUE,
+    especie              TEXT,
+    tipo                 TEXT,
+    unidade_orcamentaria TEXT,
+    valor                NUMERIC,
+    favorecido_nome      TEXT,
+    favorecido_cnpj      TEXT,
+    criado_em            TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- ----------------------------------------------------------------
@@ -82,5 +104,6 @@ CREATE TABLE IF NOT EXISTS portal_municipio_pvh.execucao_logs (
     exercicio        TEXT,
     cpf              TEXT,
     despesas_novas   INTEGER DEFAULT 0,
+    pagamentos_novos INTEGER DEFAULT 0,
     mensagem         TEXT
 );

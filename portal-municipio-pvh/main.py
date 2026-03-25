@@ -5,10 +5,11 @@ Tecnologia: Laravel Livewire v3 + PowerGrid
 
 Fluxo por exercicio/credor:
   1. GET /despesas/ -> extrai CSRF token + wire:snapshot do componente
-  2. POST /livewire/update com search=CNPJ + filtro_ano -> HTML filtrado
-  3. Parseia linhas da tabela (BeautifulSoup)
+  2. POST /livewire/update com search=nome + filtro_ano -> HTML filtrado
+  3. Parseia linhas da tabela (BeautifulSoup), extrai portal_uuid do <tr>
   4. Pagina via gotoPage() ate fim
-  5. Salva no PostgreSQL (schema portal_municipio_pvh)
+  5. Para cada despesa, GET /despesas/despesas/{uuid} -> parse tabela de pagamentos
+  6. Salva no PostgreSQL (schema portal_municipio_pvh)
 
 Otimizacao:
   - Exercicios passados ja processados sao pulados
@@ -109,6 +110,17 @@ def _parse_data(s: str):
         return None
 
 
+def _uuid_from_url(url: str) -> str | None:
+    """Extrai UUID do final de uma URL tipo /despesas/despesas/{uuid}."""
+    if not url:
+        return None
+    part = url.rstrip("/").split("/")[-1]
+    # valida formato UUID basico
+    if re.match(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", part):
+        return part
+    return None
+
+
 # ═══════════════════════════════════════════════════════════════════
 # BANCO DE DADOS
 # ═══════════════════════════════════════════════════════════════════
@@ -160,13 +172,15 @@ def log_inicio(conn, exercicio: str, cpf: str) -> int:
         return cur.fetchone()[0]
 
 
-def log_fim(conn, log_id: int, status: str, despesas_novas: int, mensagem: str = ""):
+def log_fim(conn, log_id: int, status: str, despesas_novas: int,
+            pagamentos_novos: int, mensagem: str = ""):
     with conn.cursor() as cur:
         cur.execute("""
             UPDATE portal_municipio_pvh.execucao_logs
-            SET finalizado_em = NOW(), status = %s, despesas_novas = %s, mensagem = %s
+            SET finalizado_em = NOW(), status = %s,
+                despesas_novas = %s, pagamentos_novos = %s, mensagem = %s
             WHERE id = %s
-        """, (status, despesas_novas, mensagem, log_id))
+        """, (status, despesas_novas, pagamentos_novos, mensagem, log_id))
         conn.commit()
 
 
@@ -179,12 +193,13 @@ def inserir_despesa(conn, row: dict) -> bool:
                  unidade_gestora, orgao, unidade_orcamentaria,
                  processo_numero, historico, empenho_numero,
                  liquidacao_tipo, liquidacao_numero, classificacao_funcao,
-                 favorecido_nome, favorecido_cnpj)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                 favorecido_nome, favorecido_cnpj, portal_uuid)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (numero, fase) DO UPDATE SET
                 valor           = EXCLUDED.valor,
                 valor_liquidado = EXCLUDED.valor_liquidado,
-                valor_pago      = EXCLUDED.valor_pago
+                valor_pago      = EXCLUDED.valor_pago,
+                portal_uuid     = COALESCE(EXCLUDED.portal_uuid, portal_municipio_pvh.despesas.portal_uuid)
         """, (
             row.get("exercicio"),
             _parse_data(row.get("data")),
@@ -205,11 +220,49 @@ def inserir_despesa(conn, row: dict) -> bool:
             row.get("classificacao_funcao"),
             row.get("favorecido_nome"),
             row.get("favorecido_cnpj"),
+            row.get("portal_uuid"),
         ))
         conn.commit()
         cur.execute(
             "SELECT xmax FROM portal_municipio_pvh.despesas WHERE numero = %s AND fase = %s",
             (row.get("numero"), row.get("fase_nome")),
+        )
+        r = cur.fetchone()
+        return bool(r and int(r[0]) == 0)
+
+
+def inserir_pagamento(conn, row: dict) -> bool:
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO portal_municipio_pvh.pagamentos
+                (despesa_numero, despesa_uuid, data_pagamento,
+                 liquidacao_numero, liquidacao_uuid,
+                 pagamento_numero, pagamento_uuid,
+                 especie, tipo, unidade_orcamentaria,
+                 valor, favorecido_nome, favorecido_cnpj)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (pagamento_uuid) DO UPDATE SET
+                valor          = EXCLUDED.valor,
+                data_pagamento = EXCLUDED.data_pagamento
+        """, (
+            row.get("despesa_numero"),
+            row.get("despesa_uuid"),
+            _parse_data(row.get("Data")),
+            row.get("liquidacao_numero"),
+            row.get("liquidacao_uuid"),
+            row.get("pagamento_numero"),
+            row.get("pagamento_uuid"),
+            row.get("Espécie"),
+            row.get("Tipo"),
+            row.get("Unidade Orçamentária"),
+            _parse_valor(row.get("Valor")),
+            row.get("favorecido_nome"),
+            row.get("favorecido_cnpj"),
+        ))
+        conn.commit()
+        cur.execute(
+            "SELECT xmax FROM portal_municipio_pvh.pagamentos WHERE pagamento_uuid = %s",
+            (row.get("pagamento_uuid"),),
         )
         r = cur.fetchone()
         return bool(r and int(r[0]) == 0)
@@ -297,12 +350,19 @@ def _extrair_linhas(html: str) -> tuple[list, int]:
     for tr in tbody.find_all("tr"):
         cells = tr.find_all("td")
         if len(cells) <= 1:
-            continue  # linha vazia ou "sem registros"
-        # Pula linha de sumario (ex: "Soma: R$ X")
-        row_text = tr.get_text(" ", strip=True)
-        if "Soma:" in row_text or "soma:" in row_text:
             continue
+        # Pula linha de sumario (ex: "Soma: R$ X")
+        if "Soma:" in tr.get_text(" ", strip=True):
+            continue
+
         row = {}
+
+        # Extrai UUID do x-data: pgRowAttributes({ rowId: 'UUID', ... })
+        xdata = tr.get("x-data", "")
+        m = re.search(r"rowId:\s*['\"]([0-9a-f-]{36})['\"]", xdata)
+        if m:
+            row["portal_uuid"] = m.group(1)
+
         for i, col in enumerate(col_order):
             if col != "actions" and i < len(cells):
                 row[col] = cells[i].get_text(" ", strip=True)
@@ -320,15 +380,77 @@ def _extrair_linhas(html: str) -> tuple[list, int]:
     return rows, total_pages
 
 
+def buscar_pagamentos_despesa(conn, despesa_uuid: str, despesa_numero: str,
+                               fav_nome: str, fav_cnpj: str) -> int:
+    """
+    GET /despesas/despesas/{uuid}, parseia tabela de pagamentos e insere no DB.
+    Retorna quantidade de pagamentos novos.
+    """
+    url  = f"{PORTAL_URL}/despesas/despesas/{despesa_uuid}"
+    resp = _get_session().get(url, timeout=120)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "lxml")
+
+    # Localiza tabela com colunas Data / Liquidação / Pagamento
+    tabela_pag = None
+    for table in soup.find_all("table"):
+        headers = [th.get_text(strip=True) for th in table.find_all("th")]
+        if "Pagamento" in headers and "Liquidação" in headers:
+            tabela_pag = (table, headers)
+            break
+
+    if not tabela_pag:
+        print(f"    [PAG] tabela de pagamentos nao encontrada para {despesa_numero}")
+        return 0
+
+    table, headers = tabela_pag
+    novos = 0
+
+    for tr in table.find_all("tr")[1:]:
+        cells = tr.find_all("td")
+        if not cells:
+            continue
+
+        row = {"despesa_numero": despesa_numero, "despesa_uuid": despesa_uuid,
+               "favorecido_nome": fav_nome, "favorecido_cnpj": fav_cnpj}
+
+        for i, td in enumerate(cells):
+            h = headers[i] if i < len(headers) else str(i)
+            txt = td.get_text(" ", strip=True)
+            a   = td.find("a")
+            row[h] = txt
+            # extrai UUID do link de Liquidação e Pagamento
+            if a and a.get("href"):
+                if h == "Liquidação":
+                    row["liquidacao_numero"] = txt
+                    row["liquidacao_uuid"]   = _uuid_from_url(a["href"])
+                elif h == "Pagamento":
+                    row["pagamento_numero"] = txt
+                    row["pagamento_uuid"]   = _uuid_from_url(a["href"])
+
+        if not row.get("pagamento_uuid"):
+            continue  # sem UUID nao conseguimos garantir unicidade
+
+        is_new = inserir_pagamento(conn, row)
+        if is_new:
+            novos += 1
+        label = "[+]" if is_new else "[~]"
+        print(f"      {label} PAG {row.get('pagamento_numero')} | {row.get('Valor')}")
+
+    return novos
+
+
 # ═══════════════════════════════════════════════════════════════════
 # SCRAPER
 # ═══════════════════════════════════════════════════════════════════
-def scrape_credor(conn, exercicio: str, credor: dict) -> int:
-    """Raspa todos os registros de um credor num exercicio. Retorna despesas_novas."""
+def scrape_credor(conn, exercicio: str, credor: dict) -> tuple[int, int]:
+    """Raspa despesas e pagamentos de um credor num exercicio.
+    Retorna (despesas_novas, pagamentos_novos)."""
     cpf    = _digits(credor["cpf"])
     nome   = credor["nome"]
     log_id = log_inicio(conn, exercicio, cpf)
-    despesas_novas = 0
+    despesas_novas  = 0
+    pagamentos_novos = 0
 
     try:
         csrf, snapshot = _iniciar_sessao()
@@ -345,15 +467,14 @@ def scrape_credor(conn, exercicio: str, credor: dict) -> int:
         rows, total_pages = _extrair_linhas(html)
         print(f"  [LW] pagina 1/{total_pages} | {len(rows)} linha(s)")
 
+        all_rows = list(rows)
+
         def _processar_rows(rows):
             nonlocal despesas_novas
             for row in rows:
                 row["exercicio"] = exercicio
-                # favorecido_nome e favorecido_documento vem do HTML
-                # mas usamos conf como fallback
                 if not row.get("favorecido_nome"):
                     row["favorecido_nome"] = nome
-                # normaliza cnpj: favorecido_documento -> favorecido_cnpj
                 row["favorecido_cnpj"] = _digits(
                     row.get("favorecido_documento") or cpf
                 )
@@ -374,15 +495,38 @@ def scrape_credor(conn, exercicio: str, credor: dict) -> int:
             ])
             rows, _ = _extrair_linhas(html)
             print(f"       {len(rows)} linha(s)")
+            all_rows.extend(rows)
             _processar_rows(rows)
             time.sleep(T_SLEEP)
 
-        log_fim(conn, log_id, "sucesso", despesas_novas)
-        return despesas_novas
+        # ── Pagamentos ──────────────────────────────────────────────
+        despesas_com_uuid = [
+            r for r in all_rows
+            if r.get("portal_uuid") and r.get("numero")
+        ]
+        if despesas_com_uuid:
+            print(f"\n  [PAG] Buscando pagamentos para {len(despesas_com_uuid)} despesa(s)")
+            for r in despesas_com_uuid:
+                print(f"  [PAG] {r['numero']} ({r['portal_uuid'][:8]}...)")
+                try:
+                    n = buscar_pagamentos_despesa(
+                        conn,
+                        r["portal_uuid"],
+                        r["numero"],
+                        r.get("favorecido_nome", nome),
+                        r.get("favorecido_cnpj", cpf),
+                    )
+                    pagamentos_novos += n
+                except Exception as exc:
+                    print(f"    [ERRO-PAG] {exc}")
+                time.sleep(T_SLEEP)
+
+        log_fim(conn, log_id, "sucesso", despesas_novas, pagamentos_novos)
+        return despesas_novas, pagamentos_novos
 
     except Exception as exc:
         msg = str(exc)
-        log_fim(conn, log_id, "erro", despesas_novas, msg)
+        log_fim(conn, log_id, "erro", despesas_novas, pagamentos_novos, msg)
         print(f"  [ERRO] {msg}")
         raise
 
@@ -391,7 +535,7 @@ def scrape_credor(conn, exercicio: str, credor: dict) -> int:
 # EMAIL
 # ═══════════════════════════════════════════════════════════════════
 def enviar_email(destinatarios: list, inicio: datetime, fim: datetime,
-                 total: int, credores: list):
+                 total_desp: int, total_pag: int, credores: list):
     if not destinatarios:
         print("[EMAIL] Nenhum destinatario em conf_emails, e-mail nao enviado")
         return
@@ -418,7 +562,8 @@ def enviar_email(destinatarios: list, inicio: datetime, fim: datetime,
         f"Inicio  : {inicio.strftime('%d/%m/%Y %H:%M:%S')}\n"
         f"Fim     : {fim.strftime('%d/%m/%Y %H:%M:%S')}\n"
         f"Duracao : {duracao}\n\n"
-        f"Despesas novas: {total}\n\n"
+        f"Despesas novas : {total_desp}\n"
+        f"Pagamentos novos: {total_pag}\n\n"
         f"Credores: {nomes}\n\n"
         "Mensagem automatica gerada pelo scraper."
     )
@@ -452,7 +597,8 @@ def main():
     exercicios = carregar_exercicios(conn)
     emails     = carregar_conf_emails(conn)
     inicio     = datetime.now()
-    total      = 0
+    total_desp = 0
+    total_pag  = 0
 
     if not credores:
         print("[AVISO] Nenhum credor ativo em conf_cpfs, encerrando")
@@ -473,12 +619,13 @@ def main():
                 print("  [SKIP] ja processado com sucesso")
                 continue
 
-            n = scrape_credor(conn, exercicio, credor)
-            total += n
+            d, p = scrape_credor(conn, exercicio, credor)
+            total_desp += d
+            total_pag  += p
 
     conn.close()
     fim = datetime.now()
-    enviar_email(emails, inicio, fim, total, credores)
+    enviar_email(emails, inicio, fim, total_desp, total_pag, credores)
     print("\n[FIM] Scraper concluido")
 
 
