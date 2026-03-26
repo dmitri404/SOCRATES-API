@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
 export default function Login() {
-  const [email, setEmail] = useState('')
+  const [usuario, setUsuario] = useState('')
   const [senha, setSenha] = useState('')
   const [erro, setErro] = useState('')
   const [loading, setLoading] = useState(false)
@@ -19,7 +19,8 @@ export default function Login() {
     setErro('')
     setLoading(true)
     try {
-      const data = await apiLogin(email, senha)
+      const data = await apiLogin(usuario, senha)
+      setAuth(data.access_token, {} as never)
       const user = await me()
       setAuth(data.access_token, user)
       if (user.senha_temp) {
@@ -46,13 +47,13 @@ export default function Login() {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="email">E-mail</Label>
+              <Label htmlFor="usuario">Usuário</Label>
               <Input
-                id="email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="seu@email.com"
+                id="usuario"
+                type="text"
+                value={usuario}
+                onChange={(e) => setUsuario(e.target.value)}
+                placeholder="seu usuário"
                 required
                 autoFocus
               />

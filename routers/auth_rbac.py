@@ -23,7 +23,7 @@ JWT_EXPIRY_HOURS = int(os.environ.get("JWT_EXPIRY_HOURS", 8))
 # ─── Modelos ────────────────────────────────────────────────────────────────
 
 class LoginInput(BaseModel):
-    email: str
+    usuario: str
     senha: str
 
 class AlterarSenhaInput(BaseModel):
@@ -130,8 +130,8 @@ def login(body: LoginInput, request: Request):
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, email, nome, role_id, senha_hash, ativo, senha_temp FROM rbac.usuarios WHERE email = %s",
-                (body.email,)
+                "SELECT id, email, nome, role_id, senha_hash, ativo, senha_temp FROM rbac.usuarios WHERE usuario = %s",
+                (body.usuario,)
             )
             usuario = cur.fetchone()
 

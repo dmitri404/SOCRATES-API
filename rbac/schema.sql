@@ -40,6 +40,7 @@ ON CONFLICT (slug) DO NOTHING;
 -- 3. USUÁRIOS
 CREATE TABLE IF NOT EXISTS rbac.usuarios (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    usuario       TEXT NOT NULL UNIQUE,
     email         TEXT NOT NULL UNIQUE,
     nome          TEXT NOT NULL,
     senha_hash    TEXT NOT NULL,
