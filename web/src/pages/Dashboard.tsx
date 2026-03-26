@@ -184,24 +184,6 @@ export default function Dashboard() {
               />
             </div>
 
-            {/* Containers */}
-            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-              <div className="px-4 py-3 border-b border-gray-100">
-                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Containers</p>
-              </div>
-              <div className="divide-y divide-gray-50">
-                {saude.containers.map((c) => (
-                  <div key={c.nome} className="flex items-center justify-between px-4 py-2.5">
-                    <span className="text-sm font-mono text-slate-600">{c.nome}</span>
-                    <span className={`text-xs font-medium rounded-full px-2.5 py-0.5 ${
-                      c.saudavel ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'
-                    }`}>
-                      {c.status.split(' ').slice(0, 2).join(' ')}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
           </div>
         ) : (
           <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
