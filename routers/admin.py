@@ -264,6 +264,29 @@ def _saude_containers():
         return []
 
 
+def _saude_postgres():
+    try:
+        conn = _conectar()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    pg_size_pretty(pg_database_size(current_database())) AS tamanho,
+                    (SELECT count(*) FROM pg_stat_activity WHERE state = 'active') AS conexoes_ativas,
+                    version() AS versao
+            """)
+            row = cur.fetchone()
+        conn.close()
+        versao = row["versao"].split(" ")[1] if row else "?"
+        return {
+            "tamanho":         row["tamanho"],
+            "conexoes_ativas": int(row["conexoes_ativas"]),
+            "versao":          versao,
+            "status":          "ok",
+        }
+    except Exception as e:
+        return {"status": "erro", "detalhe": str(e)}
+
+
 @router.get("/saude")
 def saude_vps(atual=Depends(usuario_atual)):
     return {
@@ -272,4 +295,5 @@ def saude_vps(atual=Depends(usuario_atual)):
         "cpu":        _saude_cpu(),
         "uptime":     _saude_uptime(),
         "containers": _saude_containers(),
+        "postgres":   _saude_postgres(),
     }

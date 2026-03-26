@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '@/store/auth'
-import { Settings, Play, RefreshCw, Server, HardDrive, Cpu, Clock } from 'lucide-react'
+import { Settings, Play, RefreshCw, Server, HardDrive, Cpu, Clock, Database } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import api from '@/api/client'
 
@@ -13,6 +13,7 @@ interface Saude {
   cpu:        { load_1m: number; load_5m: number; load_15m: number }
   uptime:     { dias: number; horas: number; minutos: number }
   containers: { nome: string; status: string; saudavel: boolean }[]
+  postgres:   { tamanho: string; conexoes_ativas: number; versao: string; status: string }
 }
 
 // ── Helpers visuais ────────────────────────────────────────────────────────────
@@ -181,6 +182,12 @@ export default function Dashboard() {
                 titulo="Uptime"
                 valor={uptimeStr}
                 sub={`${containersSaudaveis}/${containersTotal} containers ativos`}
+              />
+              <CardMetrica
+                icon={<Database size={14} />}
+                titulo="PostgreSQL"
+                valor={saude.postgres.tamanho ?? '—'}
+                sub={`v${saude.postgres.versao} · ${saude.postgres.conexoes_ativas} conexões ativas`}
               />
             </div>
 
