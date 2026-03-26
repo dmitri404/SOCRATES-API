@@ -2,12 +2,15 @@ import { NavLink, Outlet, useParams } from 'react-router-dom'
 import { useAuthStore } from '@/store/auth'
 import { cn } from '@/lib/utils'
 
+const PORTAIS_COM_POWERBI = ['municipal']
+
 const TABS = [
   { path: 'geral',       label: 'Geral' },
   { path: 'credores',    label: 'Credores' },
   { path: 'emails',      label: 'E-mails' },
   { path: 'exercicios',  label: 'Exercícios' },
   { path: 'cron',        label: 'Cron',      roles: ['admin', 'supervisor'] as string[] },
+  { path: 'powerbi',     label: 'Power BI',  portais: PORTAIS_COM_POWERBI },
   { path: 'trigger',     label: 'Executar',  roles: ['admin', 'supervisor'] as string[] },
 ]
 
@@ -17,7 +20,11 @@ export default function PortalLayout() {
 
   const portalNome = user?.portais.find((p) => p.slug === slug)?.nome ?? slug
 
-  const tabs = TABS.filter((t) => !t.roles || t.roles.includes(user?.role ?? ''))
+  const tabs = TABS.filter((t) => {
+    if (t.roles && !t.roles.includes(user?.role ?? '')) return false
+    if (t.portais && !t.portais.includes(slug ?? '')) return false
+    return true
+  })
 
   return (
     <div className="p-8">

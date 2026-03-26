@@ -9,6 +9,7 @@ import ConfCredores from '@/pages/portais/ConfCredores'
 import ConfEmails from '@/pages/portais/ConfEmails'
 import ConfExercicios from '@/pages/portais/ConfExercicios'
 import ConfCron from '@/pages/portais/ConfCron'
+import ConfPowerBI from '@/pages/portais/ConfPowerBI'
 import Trigger from '@/pages/portais/Trigger'
 import Perfil from '@/pages/Perfil'
 import Usuarios from '@/pages/admin/Usuarios'
@@ -45,6 +46,7 @@ export const router = createBrowserRouter([
               { path: 'credores',   element: <ConfCredores /> },
               { path: 'emails',     element: <ConfEmails /> },
               { path: 'exercicios', element: <ConfExercicios /> },
+              { path: 'powerbi',   element: <ConfPowerBI /> },
               {
                 element: <RequireRole roles={['admin', 'supervisor']} />,
                 children: [
