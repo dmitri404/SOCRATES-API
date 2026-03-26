@@ -15,9 +15,12 @@ _SERVICES = {
 }
 
 
+_DOCKER = "/usr/bin/docker"
+
+
 def _esta_rodando(service: str) -> bool:
     result = subprocess.run(
-        ["docker", "ps",
+        [_DOCKER, "ps",
          "--filter", f"label=com.docker.compose.service={service}",
          "--format", "{{.Names}}"],
         capture_output=True, text=True, timeout=5,
@@ -27,7 +30,7 @@ def _esta_rodando(service: str) -> bool:
 
 def _disparar(service: str) -> None:
     subprocess.Popen(
-        ["docker", "compose", "-f", _COMPOSE_FILE,
+        [_DOCKER, "compose", "-f", _COMPOSE_FILE,
          "--project-directory", "/opt/portal", "run", "--rm", service],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
