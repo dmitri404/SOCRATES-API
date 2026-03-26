@@ -129,7 +129,7 @@ services:
       - supabase_default
 
   api:
-    build: ./api
+    build: .
     container_name: portal-api
     restart: unless-stopped
     ports:
