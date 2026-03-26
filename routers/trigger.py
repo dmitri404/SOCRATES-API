@@ -1,15 +1,17 @@
 import subprocess
-from fastapi import APIRouter, Header
-from auth import verificar_api_key
+from fastapi import APIRouter, Depends, HTTPException
+from routers.auth_rbac import requer_role
 
 router = APIRouter(tags=["Trigger"])
 
 _COMPOSE_FILE = "/opt/portal/docker-compose.yml"
+
 _SERVICES = {
-    "portal-municipal-manaus": "portal-municipal-mao",
-    "portal-estado-am":        "portal-estado-am",
-    "portal-estado-ms":        "portal-estado-ms",
-    "portal-estado-ro":        "portal-estado-ro",
+    "municipal":     "portal-municipal-mao",
+    "estado-am":     "portal-estado-am",
+    "municipio-pvh": "portal-municipio-pvh",
+    "estado-ms":     "portal-estado-ms",
+    "estado-ro":     "portal-estado-ro",
 }
 
 
@@ -32,41 +34,12 @@ def _disparar(service: str) -> None:
     )
 
 
-@router.post("/portal-municipal-manaus/trigger")
-def trigger_municipal(x_api_key: str = Header(...)):
-    verificar_api_key("portal_municipal_manaus", x_api_key)
-    service = _SERVICES["portal-municipal-manaus"]
+@router.post("/{portal}/trigger")
+def trigger(portal: str, usuario=Depends(requer_role("admin", "supervisor"))):
+    service = _SERVICES.get(portal)
+    if not service:
+        raise HTTPException(status_code=404, detail="Portal não encontrado")
     if _esta_rodando(service):
-        return {"status": "ja_rodando", "servico": service}
+        return {"status": "ja_rodando", "message": f"O scraper '{service}' já está em execução."}
     _disparar(service)
-    return {"status": "iniciado", "servico": service}
-
-
-@router.post("/portal-estado-am/trigger")
-def trigger_estado_am(x_api_key: str = Header(...)):
-    verificar_api_key("portal_estado_am", x_api_key)
-    service = _SERVICES["portal-estado-am"]
-    if _esta_rodando(service):
-        return {"status": "ja_rodando", "servico": service}
-    _disparar(service)
-    return {"status": "iniciado", "servico": service}
-
-
-@router.post("/portal-estado-ms/trigger")
-def trigger_estado_ms(x_api_key: str = Header(...)):
-    verificar_api_key("portal_estado_ms", x_api_key)
-    service = _SERVICES["portal-estado-ms"]
-    if _esta_rodando(service):
-        return {"status": "ja_rodando", "servico": service}
-    _disparar(service)
-    return {"status": "iniciado", "servico": service}
-
-
-@router.post("/portal-estado-ro/trigger")
-def trigger_estado_ro(x_api_key: str = Header(...)):
-    verificar_api_key("portal_estado_ro", x_api_key)
-    service = _SERVICES["portal-estado-ro"]
-    if _esta_rodando(service):
-        return {"status": "ja_rodando", "servico": service}
-    _disparar(service)
-    return {"status": "iniciado", "servico": service}
+    return {"status": "iniciado", "message": f"Scraper '{service}' iniciado com sucesso!"}
