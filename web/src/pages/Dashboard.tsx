@@ -200,7 +200,6 @@ export default function Dashboard() {
               />
             </div>
 
-          </div>
             {/* Logs de execução */}
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
               <div className="px-4 py-3 border-b border-gray-100">
