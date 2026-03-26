@@ -38,7 +38,7 @@ export default function AppLayout() {
       {/* Sidebar */}
       <aside className="w-60 bg-slate-800 flex flex-col">
         <div className="px-4 py-5 border-b border-slate-700">
-          <h1 className="text-white font-bold text-lg">Sócrates</h1>
+          <h1 className="text-white font-bold text-lg">SOCRATES</h1>
           <p className="text-slate-400 text-xs mt-0.5">{user?.nome}</p>
         </div>
 
