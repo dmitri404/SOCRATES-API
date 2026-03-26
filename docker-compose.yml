@@ -145,6 +145,8 @@ services:
       - API_KEY_PORTAL_ESTADO_AM=estam-52394a9ff66f976ee2ab097a6844a7a4
       - API_KEY_PORTAL_ESTADO_MS=estms-7f3c91a2b84d5e6f019c237ab8d4e15f
       - API_KEY_PORTAL_ESTADO_RO=estro-3b8f72c1d94a6e520f7b183cd5a9e04d
+      - JWT_SECRET=e9550d614dd7240524cdb301368d3b80d5df856de5267e5d48edf4616c800a98
+      - JWT_EXPIRY_HOURS=8
     networks:
       - portal_default
       - supabase_default
