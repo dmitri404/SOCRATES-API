@@ -134,6 +134,8 @@ services:
     restart: unless-stopped
     ports:
       - 9000:9000
+    volumes:
+      - /var/spool/cron/crontabs:/var/spool/cron/crontabs
     environment:
       - TZ=America/Manaus
       - DB_HOST=supabase-db

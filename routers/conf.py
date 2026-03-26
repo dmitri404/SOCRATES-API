@@ -1,4 +1,5 @@
 import os
+import re
 import psycopg2
 import psycopg2.extras
 from fastapi import APIRouter, Header, HTTPException
@@ -90,6 +91,9 @@ class CredorBody(BaseModel):
 class ExercicioBody(BaseModel):
     exercicio: str
     ativo: bool = True
+
+class CronBody(BaseModel):
+    cron_expression: str
 
 
 # ── Configuração Geral ────────────────────────────────────────────────────────
@@ -392,3 +396,102 @@ def toggle_exercicio(
     finally:
         conn.close()
     return {"status": "atualizado", "ativo": row["ativo"] if row else None}
+
+
+# ── Cron ──────────────────────────────────────────────────────────────────────
+
+CRONTAB_PATH = "/var/spool/cron/crontabs/root"
+
+_CRON_CONTAINER = {
+    "municipal":     "portal-municipal-mao",
+    "estado-am":     "portal-estado-am",
+    "municipio-pvh": "portal-municipio-pvh",
+    "estado-ms":     "portal-estado-ms",
+    "estado-ro":     "portal-estado-ro",
+}
+
+_CRON_RE = re.compile(r"^(\S+\s+\S+\s+\S+\s+\S+\s+\S+)(\s+.*)$")
+
+
+def _cron_valido(expr: str) -> bool:
+    return bool(re.match(r"^\S+\s+\S+\s+\S+\s+\S+\s+\S+$", expr.strip()))
+
+
+def _ler_crontab() -> list:
+    try:
+        with open(CRONTAB_PATH, "r") as f:
+            return f.readlines()
+    except FileNotFoundError:
+        return []
+
+
+def _escrever_crontab(linhas: list) -> None:
+    with open(CRONTAB_PATH, "w") as f:
+        f.writelines(linhas)
+
+
+@router.get("/{portal}/cron")
+def get_cron(
+    portal: str,
+    x_api_key: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+):
+    _autorizar(portal, x_api_key, authorization)
+    schema, *_ = _resolver_portal(portal)
+    conn = _conectar(schema)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT cron_expression FROM conf LIMIT 1")
+            row = cur.fetchone()
+    finally:
+        conn.close()
+    return {"cron_expression": row["cron_expression"] if row else None}
+
+
+@router.put("/{portal}/cron")
+def update_cron(
+    portal: str,
+    body: CronBody,
+    x_api_key: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+):
+    _autorizar(portal, x_api_key, authorization, pode_editar=True)
+
+    expr = body.cron_expression.strip()
+    if not _cron_valido(expr):
+        raise HTTPException(status_code=422, detail="Expressão cron inválida (esperado 5 campos)")
+
+    container = _CRON_CONTAINER.get(portal)
+    if not container:
+        raise HTTPException(status_code=404, detail="Portal não mapeado para container")
+
+    # Atualiza crontab
+    linhas = _ler_crontab()
+    nova_linha = None
+    novas_linhas = []
+    for linha in linhas:
+        m = _CRON_RE.match(linha)
+        if m and container in linha:
+            nova_linha = expr + m.group(2)
+            if not nova_linha.endswith("\n"):
+                nova_linha += "\n"
+            novas_linhas.append(nova_linha)
+        else:
+            novas_linhas.append(linha)
+
+    if nova_linha is None:
+        raise HTTPException(status_code=404, detail=f"Entrada cron para '{container}' não encontrada no crontab")
+
+    _escrever_crontab(novas_linhas)
+
+    # Persiste no banco
+    schema, *_ = _resolver_portal(portal)
+    conn = _conectar(schema)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE conf SET cron_expression = %s WHERE id = 1", (expr,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"status": "atualizado", "cron_expression": expr}

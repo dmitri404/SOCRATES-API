@@ -7,6 +7,7 @@ const TABS = [
   { path: 'credores',    label: 'Credores' },
   { path: 'emails',      label: 'E-mails' },
   { path: 'exercicios',  label: 'Exercícios' },
+  { path: 'cron',        label: 'Cron',      roles: ['admin', 'supervisor'] as string[] },
   { path: 'trigger',     label: 'Executar',  roles: ['admin', 'supervisor'] as string[] },
 ]
 
