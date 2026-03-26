@@ -137,6 +137,7 @@ services:
     volumes:
       - /var/spool/cron/crontabs:/var/spool/cron/crontabs
       - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker:ro
     environment:
       - TZ=America/Manaus
       - DB_HOST=supabase-db
