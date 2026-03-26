@@ -1,17 +1,18 @@
 """
-Gestão de usuários — Sistema Socrates
-Acessível por: admin (todas as operações), supervisor (apenas role 'usuario')
+Gestão de usuários e saúde da VPS — Sistema Socrates
 """
 import os
+import re
 import secrets
 import string
+import subprocess
 import psycopg2
 import psycopg2.extras
 import bcrypt
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
-from routers.auth_rbac import requer_role
+from routers.auth_rbac import requer_role, usuario_atual
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -185,3 +186,90 @@ def atribuir_portais(usuario_id: str, body: PortaisBody, atual=Depends(requer_ro
     finally:
         conn.close()
     return {"status": "atualizado"}
+
+
+# ── Saúde da VPS ──────────────────────────────────────────────────────────────
+
+def _ler_proc(path: str) -> str:
+    with open(path) as f:
+        return f.read()
+
+
+def _saude_ram():
+    info = {}
+    for linha in _ler_proc("/proc/meminfo").splitlines():
+        k, v = linha.split(":", 1)
+        info[k.strip()] = int(v.strip().split()[0])  # kB
+    total = info["MemTotal"]
+    disponivel = info["MemAvailable"]
+    usado = total - disponivel
+    return {
+        "total_gb":    round(total   / 1024 / 1024, 1),
+        "usado_gb":    round(usado   / 1024 / 1024, 1),
+        "livre_gb":    round(disponivel / 1024 / 1024, 1),
+        "percentual":  round(usado / total * 100, 1),
+    }
+
+
+def _saude_disco():
+    st = os.statvfs("/")
+    total = st.f_blocks * st.f_frsize
+    livre = st.f_bavail * st.f_frsize
+    usado = total - livre
+    return {
+        "total_gb":   round(total / 1024**3, 1),
+        "usado_gb":   round(usado / 1024**3, 1),
+        "livre_gb":   round(livre / 1024**3, 1),
+        "percentual": round(usado / total * 100, 1),
+    }
+
+
+def _saude_cpu():
+    linha = _ler_proc("/proc/loadavg").split()
+    return {
+        "load_1m":  float(linha[0]),
+        "load_5m":  float(linha[1]),
+        "load_15m": float(linha[2]),
+    }
+
+
+def _saude_uptime():
+    segundos = float(_ler_proc("/proc/uptime").split()[0])
+    dias  = int(segundos // 86400)
+    horas = int((segundos % 86400) // 3600)
+    mins  = int((segundos % 3600) // 60)
+    return {"dias": dias, "horas": horas, "minutos": mins, "total_segundos": int(segundos)}
+
+
+def _saude_containers():
+    try:
+        result = subprocess.run(
+            ["/usr/bin/docker", "ps", "-a",
+             "--format", "{{.Names}}\t{{.Status}}\t{{.Image}}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        containers = []
+        for linha in result.stdout.strip().splitlines():
+            partes = linha.split("\t")
+            if len(partes) >= 2:
+                status = partes[1]
+                saudavel = status.startswith("Up")
+                containers.append({
+                    "nome":     partes[0],
+                    "status":   status,
+                    "saudavel": saudavel,
+                })
+        return containers
+    except Exception:
+        return []
+
+
+@router.get("/saude")
+def saude_vps(atual=Depends(usuario_atual)):
+    return {
+        "ram":        _saude_ram(),
+        "disco":      _saude_disco(),
+        "cpu":        _saude_cpu(),
+        "uptime":     _saude_uptime(),
+        "containers": _saude_containers(),
+    }
