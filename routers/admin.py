@@ -264,6 +264,63 @@ def _saude_containers():
         return []
 
 
+_LOGS_PORTAIS = {
+    "municipal":     "/opt/portal/logs/portal_municipal_mao_cron.log",
+    "estado-am":     "/opt/portal/logs/portal_estado_am_cron.log",
+    "municipio-pvh": "/opt/portal/logs/portal-municipio-pvh.log",
+    "estado-ms":     "/opt/portal/logs/portal-estado-ms-cron.log",
+    "estado-ro":     "/opt/portal/logs/portal-estado-ro-cron.log",
+}
+
+_NOMES_PORTAIS = {
+    "municipal":     "Portal Municipal Manaus",
+    "estado-am":     "Portal Estado AM",
+    "municipio-pvh": "Portal Município PVH",
+    "estado-ms":     "Portal Estado MS",
+    "estado-ro":     "Portal Estado RO",
+}
+
+
+def _parse_log(slug: str, caminho: str) -> dict:
+    try:
+        from datetime import datetime
+        mtime = os.path.getmtime(caminho)
+        ultima_exec = datetime.fromtimestamp(mtime).isoformat()
+
+        with open(caminho, "r", errors="ignore") as f:
+            linhas = f.readlines()
+
+        # Pega as últimas 150 linhas (última execução)
+        tail = "".join(linhas[-150:])
+
+        sucesso = False
+        duracao = None
+
+        if slug == "municipal":
+            sucesso = "EXECUÇÃO CONCLUÍDA" in tail
+            m = re.search(r"# Duração: ([\d:]+)", tail)
+            if m: duracao = m.group(1)
+            m = re.search(r"# Fim: (\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2})", tail)
+            if m:
+                ultima_exec = datetime.strptime(m.group(1), "%d/%m/%Y %H:%M:%S").isoformat()
+        else:
+            sucesso = "[FIM] Scraper concluido" in tail or "CONCLUÍDO em" in tail
+            m = re.search(r"CONCLUÍDO em ([\d:]+)", tail)
+            if m: duracao = m.group(1)
+
+        return {
+            "slug":       slug,
+            "nome":       _NOMES_PORTAIS[slug],
+            "ultima_exec": ultima_exec,
+            "duracao":    duracao,
+            "sucesso":    sucesso,
+        }
+    except FileNotFoundError:
+        return {"slug": slug, "nome": _NOMES_PORTAIS[slug], "ultima_exec": None, "duracao": None, "sucesso": None}
+    except Exception:
+        return {"slug": slug, "nome": _NOMES_PORTAIS[slug], "ultima_exec": None, "duracao": None, "sucesso": None}
+
+
 def _saude_postgres():
     try:
         conn = _conectar()
@@ -289,6 +346,7 @@ def _saude_postgres():
 
 @router.get("/saude")
 def saude_vps(atual=Depends(usuario_atual)):
+    logs = [_parse_log(slug, caminho) for slug, caminho in _LOGS_PORTAIS.items()]
     return {
         "ram":        _saude_ram(),
         "disco":      _saude_disco(),
@@ -296,4 +354,5 @@ def saude_vps(atual=Depends(usuario_atual)):
         "uptime":     _saude_uptime(),
         "containers": _saude_containers(),
         "postgres":   _saude_postgres(),
+        "logs":       logs,
     }

@@ -7,6 +7,14 @@ import api from '@/api/client'
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 
+interface LogPortal {
+  slug: string
+  nome: string
+  ultima_exec: string | null
+  duracao: string | null
+  sucesso: boolean | null
+}
+
 interface Saude {
   ram:        { total_gb: number; usado_gb: number; livre_gb: number; percentual: number }
   disco:      { total_gb: number; usado_gb: number; livre_gb: number; percentual: number }
@@ -14,6 +22,7 @@ interface Saude {
   uptime:     { dias: number; horas: number; minutos: number }
   containers: { nome: string; status: string; saudavel: boolean }[]
   postgres:   { tamanho: string; conexoes_ativas: number; versao: string; status: string }
+  logs:       LogPortal[]
 }
 
 // ── Helpers visuais ────────────────────────────────────────────────────────────
@@ -191,6 +200,35 @@ export default function Dashboard() {
               />
             </div>
 
+          </div>
+            {/* Logs de execução */}
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-100">
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Última execução dos scrapers</p>
+              </div>
+              <div className="divide-y divide-gray-50">
+                {saude.logs.map((log) => (
+                  <div key={log.slug} className="flex items-center justify-between px-4 py-3">
+                    <div>
+                      <p className="text-sm font-medium text-slate-700">{log.nome}</p>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        {log.ultima_exec
+                          ? new Date(log.ultima_exec).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+                          : 'Sem registro'}
+                        {log.duracao && <span className="ml-2">· {log.duracao}</span>}
+                      </p>
+                    </div>
+                    <span className={`text-xs font-medium rounded-full px-2.5 py-1 ${
+                      log.sucesso === null  ? 'bg-slate-100 text-slate-400' :
+                      log.sucesso          ? 'bg-green-100 text-green-700' :
+                                             'bg-red-100 text-red-600'
+                    }`}>
+                      {log.sucesso === null ? 'Sem log' : log.sucesso ? 'Sucesso' : 'Erro'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         ) : (
           <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
