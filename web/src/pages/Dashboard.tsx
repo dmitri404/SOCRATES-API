@@ -92,7 +92,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     carregarSaude()
-    const id = setInterval(carregarSaude, 60_000)
+    const id = setInterval(carregarSaude, 300_000)
     return () => clearInterval(id)
   }, [carregarSaude])
 
