@@ -139,6 +139,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /usr/bin/docker:/usr/bin/docker:ro
       - /usr/libexec/docker/cli-plugins:/usr/libexec/docker/cli-plugins:ro
+      - /opt/portal:/opt/portal:ro
     environment:
       - TZ=America/Manaus
       - DB_HOST=supabase-db
