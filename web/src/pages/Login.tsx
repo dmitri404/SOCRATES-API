@@ -29,8 +29,9 @@ export default function Login() {
         navigate('/dashboard')
       }
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      setErro(msg || 'Erro ao fazer login')
+      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+      const msg = typeof detail === 'string' ? detail : 'Usuário ou senha incorretos'
+      setErro(msg)
     } finally {
       setLoading(false)
     }
@@ -41,8 +42,8 @@ export default function Login() {
       <div className="w-full max-w-sm">
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
           <div className="mb-6 text-center">
-            <h1 className="text-2xl font-bold text-slate-800">Sócrates</h1>
-            <p className="text-sm text-slate-500 mt-1">Sistema de Monitoramento</p>
+            <img src="/logo.png" alt="Sócrates" className="mx-auto mb-3 w-24 h-24 object-contain" />
+            <h1 className="text-2xl font-bold text-slate-800">SOCRATES</h1>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
