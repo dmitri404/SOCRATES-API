@@ -14,6 +14,14 @@ _SERVICES = {
     "estado-ro":     "portal-estado-ro",
 }
 
+_LOGS = {
+    "municipal":     "/opt/portal/logs/portal_municipal_mao_cron.log",
+    "estado-am":     "/opt/portal/logs/portal_estado_am_cron.log",
+    "municipio-pvh": "/opt/portal/logs/portal-municipio-pvh.log",
+    "estado-ms":     "/opt/portal/logs/portal-estado-ms-cron.log",
+    "estado-ro":     "/opt/portal/logs/portal-estado-ro-cron.log",
+}
+
 
 _DOCKER = "/usr/bin/docker"
 
@@ -28,12 +36,13 @@ def _esta_rodando(service: str) -> bool:
     return bool(result.stdout.strip())
 
 
-def _disparar(service: str) -> None:
+def _disparar(service: str, log_path: str) -> None:
+    log_file = open(log_path, "a")
     subprocess.Popen(
         [_DOCKER, "compose", "-f", _COMPOSE_FILE,
          "--project-directory", "/opt/portal", "run", "--rm", service],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=log_file,
+        stderr=log_file,
     )
 
 
@@ -44,5 +53,5 @@ def trigger(portal: str, usuario=Depends(requer_role("admin", "supervisor"))):
         raise HTTPException(status_code=404, detail="Portal não encontrado")
     if _esta_rodando(service):
         return {"status": "ja_rodando", "message": f"O scraper '{service}' já está em execução."}
-    _disparar(service)
+    _disparar(service, _LOGS[portal])
     return {"status": "iniciado", "message": f"Scraper '{service}' iniciado com sucesso!"}
