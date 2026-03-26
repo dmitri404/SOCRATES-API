@@ -1,6 +1,6 @@
-# PROJETO-SOCRATES-VPS
+# SOCRATES
 
-Sistema integrado de captura, processamento e armazenamento de documentos fiscais e dados de transparência governamental.
+Sistema integrado de monitoramento, captura e gestão de dados de transparência governamental.
 
 ---
 
@@ -8,495 +8,314 @@ Sistema integrado de captura, processamento e armazenamento de documentos fiscai
 
 1. [Visão Geral](#1-visão-geral)
 2. [Arquitetura](#2-arquitetura)
-3. [Fluxo de Dados](#3-fluxo-de-dados)
-4. [Agendamento e Disparo](#4-agendamento-e-disparo)
-5. [Guia de Configuração](#5-guia-de-configuração)
-6. [Fluxograma](#6-fluxograma)
+3. [Portais Monitorados](#3-portais-monitorados)
+4. [Interface Web](#4-interface-web)
+5. [Autenticação e Controle de Acesso (RBAC)](#5-autenticação-e-controle-de-acesso-rbac)
+6. [Agendamento e Disparo](#6-agendamento-e-disparo)
+7. [Guia de Deploy](#7-guia-de-deploy)
+8. [Estrutura do Repositório](#8-estrutura-do-repositório)
 
 ---
 
 ## 1. Visão Geral
 
-### Objetivo
-
-O sistema automatiza o ciclo completo de tratamento de documentos fiscais emitidos para órgãos públicos municipais e estaduais do Amazonas. Ele resolve os seguintes problemas:
+O SOCRATES automatiza a coleta de dados de pagamentos e empenhos em portais de transparência governamental, armazena as informações em banco de dados estruturado e disponibiliza uma interface web administrativa para gestão completa do sistema.
 
 | Problema | Solução |
 |---|---|
-| Notas Fiscais em PDFs dispersos em pastas de rede | ProcessadorNF lê e estrutura os dados automaticamente |
-| Credenciais do banco de dados expostas no cliente | Portal API intermediária — o cliente nunca toca o Supabase diretamente |
-| Dados brutos de pagamentos no portal SEFAZ | Scrapers coletam e inserem no banco de forma automática |
-| Dados de pagamentos sem tratamento para análise | Cleaners transformam e normalizam os registros por portal |
-| Múltiplos portais com schemas distintos | Cada portal tem seu próprio router, schema e chave de API |
-
-### Escopo
-
-- **Portal Municipal Manaus** — NFS-e emitidas para a Prefeitura de Manaus (`schema: public`)
-- **Portal Estado AM** — Pagamentos e empenhos via portal de transparência SEFAZ/AM (`schema: portal_estado_am`)
+| Dados de pagamentos dispersos em portais públicos | Scrapers automatizados coletam e estruturam os dados |
+| Múltiplos portais com schemas distintos | Cada portal tem seu próprio schema, router e configuração independente |
+| Ausência de controle de acesso | RBAC com JWT, roles e atribuição de portais por usuário |
+| Configuração manual via banco de dados | Interface web para gerenciar credores, e-mails, exercícios e agendamentos |
+| Sem visibilidade operacional | Dashboard com saúde da VPS e status das últimas execuções |
 
 ---
 
 ## 2. Arquitetura
 
-### Stack Tecnológica
+### Stack
 
 | Camada | Tecnologia |
 |---|---|
-| Banco de Dados | PostgreSQL 15 via Supabase (self-hosted, porta 8000) |
-| API HTTP | FastAPI + Uvicorn (porta 9000) |
-| Cliente Desktop | Python 3.12 + Tkinter (Windows) |
-| Scraping Web | Playwright (Chromium headless) |
-| ETL | Python + psycopg2 (direto ao banco) |
+| Banco de Dados | PostgreSQL 15 via Supabase self-hosted |
+| API | FastAPI + Uvicorn (porta 9000, exposta via Nginx) |
+| Frontend | React + Vite + TypeScript + Tailwind CSS v4 |
+| Proxy Reverso | Nginx (porta 80) |
+| Scraping | Playwright (Chromium headless) |
 | Infraestrutura | Docker + Docker Compose (VPS 187.77.240.80) |
-| Extração de PDF | pdfplumber → PyPDF2 → Tesseract OCR (fallback em cadeia) |
 
-### Componentes e Responsabilidades
+### Diagrama
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│  CLIENTE (Windows)                                               │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │  ProcessadorNF (app.py)                                  │    │
-│  │  GUI Tkinter · Multi-perfil · Autenticação SMB           │    │
-│  │  Extração PDF · Envio de notas · Disparo de scrapers     │    │
-│  └──────────────────────────┬───────────────────────────────┘    │
-└─────────────────────────────┼────────────────────────────────────┘
-                              │ HTTP POST x-api-key
-                              ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  VPS (Docker Compose)                                            │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │  portal-api (FastAPI · porta 9000)                        │   │
-│  │  ├── /portal-municipal-manaus/faturamento                 │   │
-│  │  ├── /portal-estado-am/faturamento (+ pagamentos, logs)  │   │
-│  │  ├── /portal-municipal-manaus/trigger  ◄── disparo manual│   │
-│  │  └── /portal-estado-am/trigger         ◄── disparo manual│   │
-│  └──────────────────────────┬─────────────────────────────── ┘  │
-│                             │                                    │
-│  ┌──────────────────────────▼─────────────────────────────── ┐  │
-│  │  PostgreSQL / Supabase (porta 5432 interna)                │  │
-│  │  ├── schema: public            → faturamento, pagamentos   │  │
-│  │  │                               pagamentos_treated        │  │
-│  │  └── schema: portal_estado_am  → pagamentos, nl_itens      │  │
-│  │                                  pagamentos_treated, conf  │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                                                                  │
-│  ┌──────────────────┐  ┌──────────────────┐                     │
-│  │ portal-municipal │  │ portal-estado-am │                     │
-│  │ -mao (novo7.py)  │  │ (main.py)        │                     │
-│  │ Playwright/SEFAZ │  │ Playwright/SEFAZ │                     │
-│  └────────┬─────────┘  └────────┬─────────┘                     │
-│           │                     │                               │
-│           ▼                     ▼                               │
-│  ┌──────────────────┐  ┌──────────────────────────┐            │
-│  │ portal-cleaner   │  │ portal-cleaner-estado-am │            │
-│  │ ETL public.      │  │ ETL portal_estado_am.    │            │
-│  │ pagamentos       │  │ pagamentos               │            │
-│  └──────────────────┘  └──────────────────────────┘            │
-└──────────────────────────────────────────────────────────────────┘
+  Navegador
+      │  HTTP :80
+      ▼
+  ┌─────────────────────────────┐
+  │  Nginx                      │
+  │  /          → /var/www/socrates (React SPA)
+  │  /api/      → localhost:9000 (portal-api)
+  └─────────────────────────────┘
+                │
+                ▼
+  ┌─────────────────────────────────────────────────┐
+  │  portal-api (FastAPI)                           │
+  │                                                 │
+  │  /auth/*        JWT login, logout, me           │
+  │  /admin/*       Usuários, portais, saúde VPS    │
+  │  /conf/{portal} Geral, credores, emails,        │
+  │                 exercícios, cron                │
+  │  /{portal}/trigger  Disparo manual scraper      │
+  └──────────────────────┬──────────────────────────┘
+                         │ psycopg2
+                         ▼
+  ┌─────────────────────────────────────────────────┐
+  │  PostgreSQL 15 (supabase-db)                    │
+  │                                                 │
+  │  rbac.*              Usuários, roles, sessões   │
+  │  public.*            Portal Municipal Manaus    │
+  │  portal_estado_am.*  Portal Estado AM           │
+  │  portal_municipio_pvh.*  Portal PVH             │
+  │  portal_estado_ms.*  Portal Estado MS           │
+  │  portal_estado_ro.*  Portal Estado RO           │
+  └─────────────────────────────────────────────────┘
 ```
 
 ### Containers Docker
 
-| Container | Script | Função | Restart |
+| Container | Função | Restart |
+|---|---|---|
+| `portal-api` | API HTTP + proxy para scrapers | `unless-stopped` |
+| `portal-municipal-mao` | Scraper SEFAZ Municipal Manaus | `no` (cron/trigger) |
+| `portal-estado-am` | Scraper SEFAZ Estadual AM | `no` (cron/trigger) |
+| `portal-municipio-pvh` | Scraper Portal Porto Velho | `no` (cron/trigger) |
+| `portal-estado-ms` | Scraper Portal Estado MS | `no` (cron/trigger) |
+| `portal-estado-ro` | Scraper Portal Estado RO | `no` (cron/trigger) |
+| `portal-cleaner` | ETL `public.pagamentos` | `no` (cron) |
+| `portal-cleaner-estado-am` | ETL `portal_estado_am.pagamentos` | `no` (cron) |
+
+---
+
+## 3. Portais Monitorados
+
+| Slug | Nome | Schema BD | Cron Padrão |
 |---|---|---|---|
-| `portal-api` | `main.py` | API HTTP porta 9000 | always |
-| `portal-municipal-mao` | `novo7.py` | Scraping SEFAZ Municipal | no (cron) |
-| `portal-estado-am` | `main.py` | Scraping SEFAZ Estadual | no (cron) |
-| `portal-cleaner` | `cleaner.py` | ETL `public.pagamentos` | no (cron) |
-| `portal-cleaner-estado-am` | `cleaner_estado_am.py` | ETL `portal_estado_am.pagamentos` | no (cron) |
-| `portal-aristoteles` | `main.py` | Watcher PDF (desativado) | no |
+| `municipal` | Portal Municipal Manaus | `public` | 20:15 dias úteis |
+| `estado-am` | Portal Estado AM | `portal_estado_am` | 20:30 dias úteis |
+| `municipio-pvh` | Portal Município Porto Velho | `portal_municipio_pvh` | 19:00 dias úteis |
+| `estado-ms` | Portal Estado MS | `portal_estado_ms` | 19:00 dias úteis |
+| `estado-ro` | Portal Estado RO | `portal_estado_ro` | 20:20 dias úteis |
 
-### Redes Docker
-
-| Rede | Tipo | Membros |
-|---|---|---|
-| `portal_default` | bridge (interna) | Todos os serviços do portal |
-| `supabase_default` | external (existente) | Serviços que acessam o banco |
-
-### Comunicação entre Componentes
-
-- **ProcessadorNF → portal-api**: HTTP REST com header `x-api-key`
-- **portal-api → PostgreSQL**: psycopg2 direto via rede Docker (`supabase-db:5432`)
-- **portal-municipal-mao / portal-estado-am → PostgreSQL**: psycopg2 direto
-- **portal-cleaner / portal-cleaner-estado-am → PostgreSQL**: psycopg2 direto
+Cada portal possui as tabelas: `conf`, `conf_cpfs`, `conf_emails`, `conf_exercicios`.
 
 ---
 
-## 3. Fluxo de Dados
+## 4. Interface Web
 
-### 3.1 Processamento de Notas Fiscais (ProcessadorNF)
+Acesso: **http://187.77.240.80**
 
-**Ator:** Usuário do setor administrativo (Windows)
+### Funcionalidades por área
 
-```
-1. Usuário abre ProcessadorNF.exe e seleciona um ou mais perfis
-2. App autentica na pasta SMB via `net use` (usuário/senha de rede)
-3. Lista todos os PDFs da pasta que NÃO estão em /processados ou /erro
-4. Para cada PDF:
-   a. Extrai texto: tenta pdfplumber → PyPDF2 → Tesseract OCR
-   b. Detecta modelo do documento: DANFSE | NOTA | FATURA
-   c. Extrai campos estruturados: número, data, CNPJs, valores
-   d. Converte valores BR (1.234,56) para float
-   e. Consulta API: GET /{portal}/faturamento/existe/{numero}
-   f. Se já existe → move para /processados (duplicata, sem reinserção)
-   g. Se novo    → POST /{portal}/faturamento com JSON dos dados
-   h. Se sucesso → move para /processados
-   i. Se erro    → move para /erro
-5. Exibe relatório na interface: inseridos / duplicatas / erros
-```
+**Dashboard**
+- Cards de saúde da VPS: RAM, disco, CPU load, uptime, PostgreSQL
+- Tabela de última execução de cada scraper (data, duração, status)
+- Atualização automática a cada 5 minutos
 
-### 3.2 Inserção via Portal API
+**Portais** (`/portais/{slug}`)
 
-**Ator:** ProcessadorNF ou qualquer cliente HTTP autorizado
+| Aba | Descrição |
+|---|---|
+| Geral | URL base e modo limpeza |
+| Credores | CPFs/CNPJs monitorados com toggle ativo/inativo |
+| E-mails | Destinatários do relatório de conclusão |
+| Exercícios | Anos fiscais monitorados |
+| Cron | Agendamento visual (dias da semana + horário) |
+| Power BI | Dashboard embarcado (Portal Municipal) |
+| Executar | Disparo manual do scraper |
 
-```
-1. Cliente envia POST /{portal}/faturamento com x-api-key no header
-2. auth.py valida a chave contra a variável de ambiente correspondente
-3. Router estabelece conexão psycopg2 com supabase-db
-4. Executa INSERT INTO faturamento ... ON CONFLICT (numero_nota) DO NOTHING
-5. Verifica rowcount: 1 = inserido | 0 = duplicata
-6. Retorna JSON: {"status": "inserido" | "duplicata", "numero_nota": "..."}
-```
+**Admin → Usuários**
+- Listagem com role, portais, último acesso, status
+- Criar, editar, ativar/desativar usuários
+- Atribuir portais com controle de permissão de edição
+- Resetar senha (gera senha temporária exibida ao admin)
 
-### 3.3 Scraping Portal Municipal Manaus (portal-municipal-mao)
+**Perfil**
+- Troca de senha obrigatória quando `senha_temp = true`
 
-**Ator:** Cron 02:00 seg–sex / botão "Atualizar Portal Municipal" no ProcessadorNF
+---
 
-```
-1. Carrega configurações das tabelas conf, conf_cpfs, conf_exercicios
-2. Para cada CPF/CNPJ × exercício configurado:
-   a. Abre Playwright, navega para portal SEFAZ Municipal
-   b. Coleta empenhos e pagamentos
-   c. Verifica cache de números já existentes
-   d. Insere novos registros em public.pagamentos
-3. Envia e-mail de conclusão aos destinatários em public.conf_emails WHERE ativo=TRUE
-```
+## 5. Autenticação e Controle de Acesso (RBAC)
 
-### 3.4 Scraping Portal Estado AM (portal-estado-am)
+### Roles
 
-**Ator:** Cron 02:00 seg–sex / botão "Atualizar Portal Estado AM" no ProcessadorNF
+| Role | Permissões |
+|---|---|
+| `admin` | Acesso total: todos os portais, gestão de usuários |
+| `supervisor` | Gestão de usuários com role `usuario`, portais atribuídos |
+| `usuario` | Acesso operacional nos portais atribuídos |
+
+### Fluxo de autenticação
 
 ```
-1. Lê exercícios de portal_estado_am.conf_exercicios WHERE ativo=TRUE
-2. Lê credores de portal_estado_am.conf_cpfs WHERE ativo=TRUE
-3. Abre browser Playwright (Chromium headless)
-4. Para cada credor × exercício × mês:
-   a. Navega para portal SEFAZ/AM transparência
-   b. Preenche formulário com CNPJ e período
-   c. Coleta lista de pagamentos (num_ob, orgão, valor, datas)
-   d. Para cada pagamento, acessa detalhes e coleta NL e empenhos
-   e. Verifica duplicata antes de inserir (num_ob / num_nl)
-   f. Insere em portal_estado_am.pagamentos e nl_itens
-5. Registra execução em portal_estado_am.execucao_logs
-6. Envia e-mail de conclusão aos destinatários em portal_estado_am.conf_emails WHERE ativo=TRUE
+1. POST /auth/login → valida usuário/senha bcrypt → gera JWT
+2. JWT é armazenado no localStorage (Zustand persist)
+3. Todas as requisições enviam Authorization: Bearer <token>
+4. Sessão registrada em rbac.sessoes com hash SHA-256
+5. /auth/me retorna dados frescos (portais, role) a cada abertura do app
+6. POST /auth/logout revoga a sessão no banco
 ```
 
-### 3.5 ETL Portal Municipal (portal-cleaner)
-
-**Ator:** Cron imediatamente após portal-municipal-mao (`&&`)
+### Schema RBAC (PostgreSQL)
 
 ```
-1. SELECT * FROM public.pagamentos WHERE treatment IS NULL LIMIT 100
-2. Para cada linha:
-   a. strip_prefix em "pagamento" e "data"
-   b. Extrai valor e valor_anulado da coluna valor
-   c. Parseia descricao: nf_numero, nl_numero, nf_data, mes_ref, credor, tipo_retencao
-   d. INSERT INTO public.pagamentos_treated ON CONFLICT (id) DO NOTHING
-   e. UPDATE pagamentos SET treatment = 'success' | 'failure'
-3. Registra métricas em cleaner_log
-```
-
-### 3.6 ETL Portal Estado AM (portal-cleaner-estado-am)
-
-**Ator:** Cron imediatamente após portal-estado-am (`&&`)
-
-```
-1. SELECT * FROM portal_estado_am.pagamentos WHERE treatment IS NULL LIMIT 100
-2. Para cada linha, parseia descricao_ob extraindo:
-   - nl_numero  → ex. 2025NL0001591
-   - nf_numero  → ex. 3530 (via lista de 35+ prefixos)
-   - nf_data    → ex. 01/12/2025 ou 06/01/26
-   - mes_ref    → ex. JAN/2025
-   - processo   → ex. 028101.009412/2025-05
-   - contrato   → ex. 43/2021
-3. INSERT INTO portal_estado_am.pagamentos_treated ON CONFLICT (id) DO NOTHING
-4. UPDATE pagamentos SET treatment = 'success' | 'failure'
+rbac.roles           — admin (1), supervisor (2), usuario (3)
+rbac.portais         — slugs dos portais ativos
+rbac.usuarios        — credenciais, role, senha_temp
+rbac.usuario_portais — atribuição usuário × portal × pode_editar
+rbac.sessoes         — tokens ativos com expiração
+rbac.audit_log       — log de login/logout
 ```
 
 ---
 
-## 4. Agendamento e Disparo
+## 6. Agendamento e Disparo
 
-### 4.1 Cron (automático)
+### Crontab atual (`/var/spool/cron/crontabs/root`)
 
 ```
-# Scraping + ETL — Portal Municipal Manaus (sequencial)
-0 2 * * 1-5   portal-municipal-mao  &&  portal-cleaner
-
-# Scraping + ETL — Portal Estado AM (sequencial)
-0 2 * * 1-5   portal-estado-am  &&  portal-cleaner-estado-am
+15 20 * * 1-5  portal-municipal-mao  &&  cleaner
+30 20 * * 1-5  portal-estado-am      &&  cleaner-estado-am
+00 19 * * 1-5  portal-municipio-pvh
+00 19 * * 1-5  portal-estado-ms
+20 20 * * 1-5  portal-estado-ro
 ```
 
-> O operador `&&` garante que o cleaner só executa se o scraper terminar **sem erro**.
+O agendamento pode ser editado pela interface web (aba **Cron** de cada portal) sem acesso direto ao servidor.
 
-### 4.2 Disparo Manual via ProcessadorNF
+### Disparo manual
 
-Os scrapers podem ser disparados a qualquer momento diretamente pela interface do ProcessadorNF, na seção **"Disparo de Scrapers"**:
-
-| Botão | Endpoint chamado | Serviço disparado |
-|---|---|---|
-| Atualizar Portal Municipal | `POST /portal-municipal-manaus/trigger` | `portal-municipal-mao` |
-| Atualizar Portal Estado AM | `POST /portal-estado-am/trigger` | `portal-estado-am` |
-
-O endpoint verifica se o container já está rodando antes de disparar, evitando execuções simultâneas. A resposta é imediata (`{"status": "iniciado"}` ou `{"status": "ja_rodando"}`). O resultado da coleta chega por e-mail ao concluir.
-
-A `portal-api` dispara os containers via Docker CLI (socket montado em `/var/run/docker.sock`).
+Via interface web (aba **Executar** do portal ou botão no Dashboard):
+- Verifica se o container já está rodando antes de disparar
+- Redireciona a saída para o arquivo de log correspondente
+- Resposta imediata; resultado chega por e-mail ao concluir
 
 ---
 
-## 5. Guia de Configuração
+## 7. Guia de Deploy
 
-### 5.1 Variáveis de Ambiente — Portal API (`api` service)
+### Variáveis de Ambiente — `portal-api`
 
-| Variável | Descrição | Exemplo |
-|---|---|---|
-| `DB_HOST` | Host do PostgreSQL (interno Docker) | `supabase-db` |
-| `DB_PORT` | Porta do PostgreSQL | `5432` |
-| `DB_NAME` | Nome do banco | `postgres` |
-| `DB_USER` | Usuário do banco | `postgres` |
-| `DB_PASSWORD` | Senha do banco | _(ver .env)_ |
-| `API_KEY_PORTAL_MUNICIPAL_MANAUS` | Chave de acesso — portal municipal | _(ver .env)_ |
-| `API_KEY_PORTAL_ESTADO_AM` | Chave de acesso — portal estadual | _(ver .env)_ |
+| Variável | Descrição |
+|---|---|
+| `DB_HOST` | Host PostgreSQL interno (`supabase-db`) |
+| `DB_PORT` | Porta PostgreSQL (`5432`) |
+| `DB_NAME` | Nome do banco (`postgres`) |
+| `DB_USER` | Usuário do banco |
+| `DB_PASSWORD` | Senha do banco |
+| `JWT_SECRET` | Chave secreta para assinatura JWT |
+| `JWT_EXPIRY_HOURS` | Validade do token em horas (padrão: `8`) |
+| `API_KEY_PORTAL_MUNICIPAL_MANAUS` | Chave legada — portal municipal |
+| `API_KEY_PORTAL_ESTADO_AM` | Chave legada — portal estado AM |
+| `API_KEY_PORTAL_ESTADO_MS` | Chave legada — portal estado MS |
+| `API_KEY_PORTAL_ESTADO_RO` | Chave legada — portal estado RO |
 
-> As variáveis são carregadas via `.env` no `docker-compose.yml`. O arquivo `.env` **não é versionado** (está no `.gitignore`).
+### Volumes montados na `portal-api`
 
-### 5.2 Configuração dos Cleaners
+| Volume | Finalidade |
+|---|---|
+| `/var/spool/cron/crontabs` | Leitura e escrita do crontab via interface web |
+| `/var/run/docker.sock` | Comunicação com o daemon Docker |
+| `/usr/bin/docker` | CLI Docker do host |
+| `/usr/libexec/docker/cli-plugins` | Plugin `docker compose` |
+| `/opt/portal` | Acesso ao `docker-compose.yml` para `docker compose run` |
 
-Os cleaners usam arquivos `*_config.json` com credenciais do banco — **não versionados**.
-
-| Serviço | Arquivo de config | Schema |
-|---|---|---|
-| `portal-cleaner` | `cleaner/cleaner_config.json` | `public` |
-| `portal-cleaner-estado-am` | `cleaner-estado-am/cleaner_estado_am_config.json` | `portal_estado_am` |
-
-### 5.3 Configuração do ProcessadorNF (cliente Windows)
-
-O app armazena configuração em:
-```
-C:\Users\{usuario}\AppData\Roaming\ProcessadorNF\conf.ini
-```
-
-Estrutura do arquivo:
-```ini
-[PERFIL_1]
-nome     = PREFEITURA MANAUS
-smb_path = \\192.168.51.200\compartilhamento\PREFEITURA_MAO
-usuario  = dominio\usuario
-senha    = senha_smb
-portal   = portal_municipal_manaus
-
-[PERFIL_2]
-nome     = ESTADO AM
-smb_path = \\192.168.51.200\compartilhamento\ESTADO_AM
-usuario  = dominio\usuario
-senha    = senha_smb
-portal   = portal_estado_am
-```
-
-A tela de configuração é protegida por senha. Para adicionar/editar perfis, acesse **Configurações** na interface.
-
-### 5.4 Endpoints da Portal API
-
-**Base URL:** `http://187.77.240.80:9000`
-
-| Método | Rota | Descrição |
-|---|---|---|
-| `GET` | `/health` | Verifica se a API está no ar |
-| `POST` | `/portal-municipal-manaus/faturamento` | Insere NFS-e municipal |
-| `GET` | `/portal-municipal-manaus/faturamento/existe/{numero}` | Verifica duplicata |
-| `POST` | `/portal-municipal-manaus/trigger` | Dispara scraper municipal |
-| `POST` | `/portal-estado-am/faturamento` | Insere NFS-e estadual |
-| `GET` | `/portal-estado-am/faturamento/existe/{numero}` | Verifica duplicata |
-| `POST` | `/portal-estado-am/trigger` | Dispara scraper estadual |
-| `GET` | `/portal-estado-am/pagamentos` | Lista pagamentos (filtros: exercicio, mes, orgao) |
-| `GET` | `/portal-estado-am/nl-itens` | Lista empenhos/NL |
-| `GET` | `/portal-estado-am/resumo` | Totais e métricas |
-| `GET` | `/portal-estado-am/logs` | Logs de execução |
-| `GET` | `/portal-estado-am/conf` | Lista configurações |
-| `PUT` | `/portal-estado-am/conf/{chave}` | Atualiza configuração |
-
-**Autenticação:** todas as rotas (exceto `/health`) exigem o header `x-api-key`.
-
-**Documentação interativa (Swagger):** `http://187.77.240.80:9000/docs`
-
-### 5.5 Dependências — Build do EXE (ProcessadorNF)
+### Comandos de deploy
 
 ```bash
-pip install pyinstaller pdfplumber PyPDF2 pytesseract pdf2image Pillow requests
-
-# Gerar EXE
-pyinstaller app.py --onefile --windowed --name ProcessadorNF
-```
-
-O executável gerado fica em `dist/ProcessadorNF.exe`. Não requer instalação — basta distribuir o `.exe`.
-
-### 5.6 Deploy no VPS
-
-```bash
-# Subir todos os serviços permanentes
+# Atualizar código
 cd /opt/portal
-docker compose up -d
+git pull
 
-# Reconstruir um serviço após mudanças
+# Reconstruir e reiniciar a API
 docker compose up -d --build api
-docker compose build cleaner && docker compose up -d cleaner
 
-# Executar scraper/cleaner manualmente
-docker compose run --rm portal-municipal-mao
-docker compose run --rm cleaner
-docker compose run --rm portal-estado-am
-docker compose run --rm cleaner-estado-am
+# Reconstruir o frontend
+cd web
+npm install
+npm run build
+cp -r dist/* /var/www/socrates/
 
-# Ver logs em tempo real
+# Ver logs da API
 docker compose logs -f portal-api
 
-# Status dos containers
-docker compose ps
+# Executar scraper manualmente
+docker compose run --rm portal-municipal-mao
 ```
 
-### 5.7 Estrutura do Repositório
+### Nginx (`/etc/nginx/sites-available/socrates`)
 
-```
-PROJETO-SOCRATES-VPS/
-├── main.py                        # Entry point FastAPI
-├── auth.py                        # Validação de API keys
-├── Dockerfile                     # Build da portal-api
-├── docker-compose.yml             # Orquestração completa
-├── .gitignore
-│
-├── routers/
-│   ├── portal_municipal_manaus.py
-│   ├── portal_estado_am.py
-│   └── trigger.py                 # Endpoints de disparo manual
-│
-├── ProcessadorNF/                 # Código-fonte do cliente Windows
-│   ├── app.py
-│   ├── extractor.py
-│   ├── pdf_reader.py
-│   ├── supabase_client.py
-│   └── utils.py
-│
-├── cleaner/                       # ETL public.pagamentos
-│   ├── cleaner.py
-│   ├── cleaner_config.json        # ← não versionado (credenciais)
-│   └── Dockerfile
-│
-├── cleaner-estado-am/             # ETL portal_estado_am.pagamentos
-│   ├── cleaner_estado_am.py
-│   ├── cleaner_estado_am_config.json  # ← não versionado (credenciais)
-│   └── Dockerfile
-│
-├── aristoteles/                   # Watcher PDF (desativado)
-├── portal-estado-am/              # Scraper SEFAZ Estadual
-├── socrates/                      # Scraper SEFAZ Municipal (novo7.py)
-└── scripts/                       # (vazio — disparo migrado para portal-api/trigger)
+```nginx
+server {
+    listen 80 default_server;
+    root /var/www/socrates;
+    index index.html;
+
+    location / { try_files $uri $uri/ /index.html; }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:9000/;
+        proxy_read_timeout 300;
+    }
+
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+}
 ```
 
 ---
 
-## 6. Fluxograma
+## 8. Estrutura do Repositório
 
-### Fluxo Principal — ProcessadorNF
-
-```mermaid
-flowchart TD
-    A([Usuário abre ProcessadorNF.exe]) --> B[Seleciona perfis na interface]
-    B --> C{Senha configuração?}
-    C -- Editar perfis --> D[Dialog: Configurações\nAdd / Edit / Delete perfil]
-    D --> B
-    C -- Processar --> E[Para cada perfil selecionado]
-
-    E --> F[Autenticar SMB\nnet use + usuário/senha]
-    F --> G{Conexão OK?}
-    G -- Não --> H[Exibe erro e passa para próximo perfil]
-    G -- Sim --> I[Lista PDFs na pasta\nexclui /processados e /erro]
-
-    I --> J{PDFs encontrados?}
-    J -- Não --> K[Log: nenhum arquivo]
-    J -- Sim --> L[Para cada PDF]
-
-    L --> M[Extrai texto do PDF]
-    M --> M1{pdfplumber OK?}
-    M1 -- Sim --> N
-    M1 -- Não --> M2{PyPDF2 OK?}
-    M2 -- Sim --> N
-    M2 -- Não --> M3[Tesseract OCR]
-    M3 --> N[Texto extraído]
-
-    N --> O[Detecta modelo:\nDANFSE / NOTA / FATURA]
-    O --> P{Modelo identificado?}
-    P -- Não --> Q[Move para /erro\nLog: modelo desconhecido]
-    P -- Sim --> R[Extrai campos estruturados\nnúmero, data, CNPJs, valores]
-
-    R --> S[GET /portal/faturamento/existe/{numero}]
-    S --> T{Já existe?}
-    T -- Sim --> U[Move para /processados\nLog: duplicata]
-    T -- Não --> V[POST /portal/faturamento\nJSON com dados da nota]
-
-    V --> W{HTTP 200?}
-    W -- Sim, inserido --> X[Move para /processados\nLog: inserido]
-    W -- Sim, duplicata --> U
-    W -- Erro --> Y[Move para /erro\nLog: falha na API]
-
-    X --> L
-    U --> L
-    Q --> L
-    Y --> L
-
-    L -- Todos processados --> Z[Exibe relatório:\nInseridos / Duplicatas / Erros]
-    K --> Z
-    H --> Z
-    Z --> E
-    E -- Todos perfis concluídos --> AA([Processamento finalizado])
 ```
-
-### Fluxo de Autenticação da Portal API
-
-```mermaid
-flowchart LR
-    A[Cliente HTTP] -->|POST /portal-X/faturamento\nx-api-key: abc123| B[portal-api]
-    B --> C{auth.py:\nAPI_KEYS.get portal}
-    C -->|Chave inválida ou ausente| D[HTTP 401 Unauthorized]
-    C -->|Chave válida| E[Router executa]
-    E --> F[(PostgreSQL\nsupabase-db:5432)]
-    F -->|rowcount = 1| G[status: inserido]
-    F -->|rowcount = 0| H[status: duplicata]
-```
-
-### Fluxo de Disparo e Coleta — Scrapers
-
-```mermaid
-flowchart TD
-    A([Cron 02:00]) --> C
-    B([ProcessadorNF\nbotão Disparo]) -->|POST /trigger\nx-api-key| P[portal-api]
-    P --> Q{container\njá rodando?}
-    Q -- Sim --> R([ja_rodando])
-    Q -- Não --> C[portal-estado-am\nou portal-municipal-mao]
-
-    C --> D[Para cada credor × exercício × mês]
-    D --> E{num_ob já existe?}
-    E -- Sim --> F[Ignora]
-    E -- Não --> G[Insere em pagamentos\ne nl_itens]
-    G --> D
-    F --> D
-    D -- Todos concluídos --> H[Registra execucao_logs]
-    H --> I[Envia e-mail de conclusão\npara conf_emails WHERE ativo=TRUE]
-    I --> J{Saiu sem erro?}
-    J -- Não --> K([Cleaner não executa])
-    J -- Sim --> L[portal-cleaner\nou portal-cleaner-estado-am]
-    L --> M[Parseia descricao_ob\nInsere em pagamentos_treated]
-    M --> N([ETL concluído])
+SOCRATES/
+├── main.py                        # Entry point FastAPI
+├── auth.py                        # Validação de API keys (legado)
+├── Dockerfile                     # Build da portal-api
+├── docker-compose.yml             # Orquestração completa
+│
+├── routers/
+│   ├── auth_rbac.py               # JWT: login, logout, me, alterar-senha
+│   ├── admin.py                   # Usuários, portais, saúde VPS
+│   ├── conf.py                    # Configurações por portal (geral, credores, emails, exercícios, cron)
+│   ├── trigger.py                 # Disparo manual de scrapers
+│   ├── portal_municipal_manaus.py # Router faturamento municipal
+│   ├── portal_estado_am.py        # Router faturamento estado AM
+│   ├── portal_estado_ms.py        # Router faturamento estado MS
+│   └── portal_estado_ro.py        # Router faturamento estado RO
+│
+├── rbac/
+│   └── schema.sql                 # DDL completo do schema RBAC
+│
+├── web/                           # Frontend React
+│   ├── src/
+│   │   ├── api/                   # Clientes HTTP (auth, conf, admin)
+│   │   ├── layouts/AppLayout.tsx  # Sidebar + navegação
+│   │   ├── pages/
+│   │   │   ├── Login.tsx
+│   │   │   ├── Dashboard.tsx      # Saúde VPS + últimas execuções
+│   │   │   ├── Perfil.tsx
+│   │   │   ├── admin/Usuarios.tsx # CRUD de usuários
+│   │   │   └── portais/           # Abas por portal
+│   │   ├── store/auth.ts          # Zustand: token + user
+│   │   └── router.tsx             # React Router + guards
+│   └── public/logo.png
+│
+├── portal-municipio-mao/          # Scraper Municipal Manaus
+├── portal-estado-am/              # Scraper Estadual AM
+├── portal-municipio-pvh/          # Scraper Municipal Porto Velho
+├── portal-estado-ms/              # Scraper Estadual MS
+├── portal-estado-ro/              # Scraper Estadual RO
+├── cleaner/                       # ETL public.pagamentos
+└── cleaner-estado-am/             # ETL portal_estado_am.pagamentos
 ```
