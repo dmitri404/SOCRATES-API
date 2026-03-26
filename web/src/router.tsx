@@ -11,6 +11,7 @@ import ConfExercicios from '@/pages/portais/ConfExercicios'
 import ConfCron from '@/pages/portais/ConfCron'
 import Trigger from '@/pages/portais/Trigger'
 import Perfil from '@/pages/Perfil'
+import Usuarios from '@/pages/admin/Usuarios'
 
 function RequireAuth() {
   const token = useAuthStore((s) => s.token)
@@ -56,7 +57,7 @@ export const router = createBrowserRouter([
           {
             element: <RequireRole roles={['admin', 'supervisor']} />,
             children: [
-              { path: '/admin/usuarios', element: <div className="p-8"><h2 className="text-2xl font-bold text-slate-800">Usuários</h2><p className="text-slate-500 mt-2">Em construção...</p></div> },
+              { path: '/admin/usuarios', element: <Usuarios /> },
             ],
           },
         ],
