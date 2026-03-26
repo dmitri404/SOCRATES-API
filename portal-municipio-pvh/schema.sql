@@ -7,6 +7,21 @@
 CREATE SCHEMA IF NOT EXISTS portal_municipio_pvh;
 
 -- ----------------------------------------------------------------
+-- Configuracoes gerais
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS portal_municipio_pvh.conf (
+    id             SERIAL PRIMARY KEY,
+    url_base       TEXT,
+    modo_limpar    BOOLEAN NOT NULL DEFAULT false,
+    criado_em      TIMESTAMPTZ DEFAULT NOW(),
+    atualizado_em  TIMESTAMPTZ DEFAULT NOW()
+);
+
+INSERT INTO portal_municipio_pvh.conf (url_base, modo_limpar)
+VALUES ('https://transparencia.portovelho.ro.gov.br', false)
+ON CONFLICT DO NOTHING;
+
+-- ----------------------------------------------------------------
 -- CPFs/CNPJs monitorados
 -- ----------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS portal_municipio_pvh.conf_cpfs (

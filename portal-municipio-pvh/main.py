@@ -38,6 +38,12 @@ DESPESAS_URL = PORTAL_URL + "/despesas/"
 LIVEWIRE_URL = PORTAL_URL + "/livewire/update"
 T_SLEEP      = 3
 
+def _atualizar_urls(url_base: str):
+    global PORTAL_URL, DESPESAS_URL, LIVEWIRE_URL
+    PORTAL_URL   = url_base.rstrip("/")
+    DESPESAS_URL = PORTAL_URL + "/despesas/"
+    LIVEWIRE_URL = PORTAL_URL + "/livewire/update"
+
 # Ordem das colunas da tabela PowerGrid (data-column nos <th>)
 COL_ORDER = [
     "actions",
@@ -132,6 +138,15 @@ def _conectar():
         user=os.environ["SUPABASE_DB_USER"],
         password=os.environ["SUPABASE_DB_PASSWORD"],
     )
+
+
+def carregar_conf(conn) -> dict:
+    with conn.cursor() as cur:
+        cur.execute("SELECT url_base, modo_limpar FROM portal_municipio_pvh.conf ORDER BY id LIMIT 1")
+        row = cur.fetchone()
+        if row:
+            return {"url_base": row[0], "modo_limpar": row[1]}
+        return {"url_base": None, "modo_limpar": False}
 
 
 def carregar_conf_cpfs(conn) -> list:
@@ -626,6 +641,7 @@ def main():
     print("=" * 60)
 
     conn       = _conectar()
+    conf       = carregar_conf(conn)
     credores   = carregar_conf_cpfs(conn)
     exercicios = carregar_exercicios(conn)
     emails     = carregar_conf_emails(conn)
@@ -633,12 +649,16 @@ def main():
     total_desp = 0
     total_pag  = 0
 
+    if conf["url_base"]:
+        _atualizar_urls(conf["url_base"])
+    modo_limpar = conf["modo_limpar"]
+
     if not credores:
         print("[AVISO] Nenhum credor ativo em conf_cpfs, encerrando")
         conn.close()
         return
 
-    print(f"[CONF] {len(credores)} credor(es) | exercicios: {exercicios}")
+    print(f"[CONF] {len(credores)} credor(es) | exercicios: {exercicios} | modo_limpar: {modo_limpar}")
 
     ano_atual = datetime.now().year
 
@@ -648,7 +668,7 @@ def main():
             print(f"\n[EXERCICIO] {exercicio} | {credor['nome']}")
 
             eh_atual = int(exercicio) >= ano_atual
-            if not eh_atual and exercicio_ja_processado(conn, exercicio, cpf):
+            if not modo_limpar and not eh_atual and exercicio_ja_processado(conn, exercicio, cpf):
                 print("  [SKIP] ja processado com sucesso")
                 continue
 
