@@ -1,12 +1,18 @@
+import { useEffect } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuthStore } from '@/store/auth'
-import { logout as apiLogout } from '@/api/auth'
+import { logout as apiLogout, me } from '@/api/auth'
 import { LayoutDashboard, Settings, Users, LogOut, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export default function AppLayout() {
-  const { user, logout } = useAuthStore()
+  const { user, setUser, logout } = useAuthStore()
   const navigate = useNavigate()
+
+  // Atualiza dados do usuário (portais, role) a cada montagem do app
+  useEffect(() => {
+    me().then(setUser).catch(() => {})
+  }, [])
 
   const handleLogout = async () => {
     try { await apiLogout() } catch {}
