@@ -57,6 +57,16 @@ services:
     environment:
       - TZ=America/Manaus
 
+  cleaner-municipio-pvh:
+    build: ./cleaner-municipio-pvh
+    container_name: portal-cleaner-municipio-pvh
+    restart: no
+    networks:
+      - portal_default
+      - supabase_default
+    environment:
+      - TZ=America/Porto_Velho
+
   portal-estado-ms:
     build: ./portal-estado-ms
     container_name: portal-estado-ms
