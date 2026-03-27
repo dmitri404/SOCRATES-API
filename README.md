@@ -92,6 +92,7 @@ O SOCRATES automatiza a coleta de dados de pagamentos e empenhos em portais de t
 | `portal-estado-ro` | Scraper Portal Estado RO | `no` (cron/trigger) |
 | `portal-cleaner` | ETL `public.pagamentos` | `no` (cron) |
 | `portal-cleaner-estado-am` | ETL `portal_estado_am.pagamentos` | `no` (cron) |
+| `portal-cleaner-municipio-pvh` | ETL `portal_municipio_pvh.pagamentos` | `no` (cron) |
 
 ---
 
@@ -184,7 +185,7 @@ rbac.audit_log       — log de login/logout
 ```
 15 20 * * 1-5  portal-municipal-mao  &&  cleaner
 30 20 * * 1-5  portal-estado-am      &&  cleaner-estado-am
-00 19 * * 1-5  portal-municipio-pvh
+00 19 * * 1-5  portal-municipio-pvh  &&  cleaner-municipio-pvh
 00 19 * * 1-5  portal-estado-ms
 20 20 * * 1-5  portal-estado-ro
 ```
@@ -317,5 +318,6 @@ SOCRATES/
 ├── portal-estado-ms/              # Scraper Estadual MS
 ├── portal-estado-ro/              # Scraper Estadual RO
 ├── cleaner/                       # ETL public.pagamentos
-└── cleaner-estado-am/             # ETL portal_estado_am.pagamentos
+├── cleaner-estado-am/             # ETL portal_estado_am.pagamentos
+└── cleaner-municipio-pvh/         # ETL portal_municipio_pvh.pagamentos
 ```
